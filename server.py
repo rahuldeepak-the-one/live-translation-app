@@ -10,6 +10,7 @@ Routes:
 """
 import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -29,7 +30,22 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 def create_app(stt=None, translator=None):
-    app = FastAPI(title="Church Live Translation")
+    @asynccontextmanager
+    async def lifespan(application):
+        if application.state.stt is None:
+            from stt import WhisperSTT
+            application.state.stt = WhisperSTT()
+        if application.state.translator is None:
+            from translator import load_translator
+            application.state.translator = load_translator()
+        if application.state.pipeline is None:
+            application.state.pipeline = UtterancePipeline(
+                application.state.stt, application.state.translator, application.state.hub
+            )
+        logger.info("Server ready on http://%s:%d", HOST, PORT)
+        yield
+
+    app = FastAPI(title="Church Live Translation", lifespan=lifespan)
     hub = BroadcastHub()
     app.state.hub = hub
     app.state.stt = stt
@@ -37,22 +53,11 @@ def create_app(stt=None, translator=None):
     # Build eagerly when both deps are already supplied (e.g. tests injecting
     # stubs via a bare TestClient) so we don't depend on the ASGI lifespan
     # "startup" event having fired. Real deployments pass stt=translator=None
-    # and the pipeline is built lazily below once startup loads the models.
+    # and the pipeline is built lazily in lifespan once the models load; its
+    # `is None` guards keep the two paths idempotent.
     app.state.pipeline = (
         UtterancePipeline(stt, translator, hub) if stt is not None and translator is not None else None
     )
-
-    @app.on_event("startup")
-    async def startup():
-        if app.state.stt is None:
-            from stt import WhisperSTT
-            app.state.stt = WhisperSTT()
-        if app.state.translator is None:
-            from translator import load_translator
-            app.state.translator = load_translator()
-        if app.state.pipeline is None:
-            app.state.pipeline = UtterancePipeline(app.state.stt, app.state.translator, hub)
-        logger.info("Server ready on http://%s:%d", HOST, PORT)
 
     @app.websocket("/ws/mic")
     async def ws_mic(ws: WebSocket):
@@ -79,7 +84,11 @@ def create_app(stt=None, translator=None):
                     if buf.should_process():
                         await ws.send_json({"type": "status", "state": "processing"})
                         await app.state.hub.publish_status("processing")
-                        result = await app.state.pipeline.process(buf.get_audio_and_clear())
+                        try:
+                            result = await app.state.pipeline.process(buf.get_audio_and_clear())
+                        except Exception:
+                            logger.exception("Pipeline failure — utterance dropped")
+                            result = None
                         if result:
                             await ws.send_json({"type": "sentence", "en": result[1]})
                         await ws.send_json({"type": "status", "state": "listening"})

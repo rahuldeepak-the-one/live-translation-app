@@ -45,3 +45,21 @@ def test_pages_served():
         r = client.get(path)
         assert r.status_code == 200, path
         assert "<html" in r.text.lower()
+
+
+class ExplodingSTT:
+    async def transcribe(self, audio_np):
+        raise RuntimeError("model exploded")
+
+
+def test_pipeline_failure_keeps_mic_socket_alive():
+    app = create_app(stt=ExplodingSTT(), translator=StubTranslator())
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        assert mic.receive_json()["type"] == "status"  # ready
+        mic.send_bytes(loud(2.0))
+        mic.send_bytes(silence(1.0))
+        got = [mic.receive_json()["type"] for _ in range(2)]
+        assert got == ["status", "status"]  # processing -> listening, no crash
+        # socket still usable afterwards
+        mic.send_bytes(silence(0.1))
