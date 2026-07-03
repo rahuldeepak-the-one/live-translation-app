@@ -1,291 +1,128 @@
-"""
-Live Translation Server — Self-hosted STT + Translation
-Uses faster-whisper (GPU) for speech-to-text and NLLB-200 for translation.
-Tablet connects via WebSocket over local WiFi.
-"""
+"""Live Translation Server — thin wiring around the pipeline modules.
 
-import asyncio
+Routes:
+  /            -> redirect to /display
+  /mic         -> phone/laptop page that captures audio
+  /display     -> projector page (all languages)
+  /view        -> personal phone page (choose language)
+  /ws/mic      -> binary PCM in; JSON status/sentence feedback out
+  /ws/captions -> JSON caption stream out (hub protocol)
+"""
 import json
-import time
 import logging
-import struct
-import numpy as np
 from pathlib import Path
 
-import torch
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+
+from audio_buffer import AudioBuffer
+from config import HOST, PORT, SAMPLE_RATE
+from hub import BroadcastHub
+from pipeline import UtterancePipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-WHISPER_MODEL_SIZE = "medium"          # Options: tiny, base, small, medium, large-v3
-NLLB_MODEL_NAME = "facebook/nllb-200-distilled-600M"
-SILENCE_THRESHOLD = 300                # RMS below this = silence
-SILENCE_DURATION_S = 0.6               # Seconds of silence to trigger processing
-MAX_BUFFER_S = 8.0                     # Force process after this many seconds
-MIN_SPEECH_S = 0.5                     # Don't process less than this
-SAMPLE_RATE = 16000                    # Expected sample rate from client
-HOST = "0.0.0.0"
-PORT = 8080
-
-# ============================================================
-# WHISPER STT
-# ============================================================
-class WhisperSTT:
-    def __init__(self, model_size=WHISPER_MODEL_SIZE):
-        from faster_whisper import WhisperModel
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        compute_type = "float16" if device == "cuda" else "int8"
-        logger.info(f"Loading Whisper {model_size} on {device} ({compute_type})...")
-        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
-        self.lock = asyncio.Lock()
-        logger.info("Whisper model loaded.")
-
-    async def transcribe(self, audio_np, language=None):
-        async with self.lock:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self._transcribe_sync, audio_np, language)
-
-    def _transcribe_sync(self, audio_np, language):
-        # Normalize to float32 in [-1, 1]
-        if audio_np.dtype == np.int16:
-            audio_np = audio_np.astype(np.float32) / 32768.0
-
-        lang_arg = language if language and language != "auto" else None
-        segments, info = self.model.transcribe(
-            audio_np,
-            language=lang_arg,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
-        )
-        text = " ".join([s.text.strip() for s in segments])
-        return text.strip()
+STATIC_DIR = Path(__file__).parent / "static"
 
 
-# ============================================================
-# NLLB TRANSLATOR
-# ============================================================
-class NLLBTranslator:
-    LANG_MAP = {
-        "en": "eng_Latn",
-        "ml": "mal_Mlym",
-        "hi": "hin_Deva",
-        "te": "tel_Telu",
-    }
+def create_app(stt=None, translator=None):
+    app = FastAPI(title="Church Live Translation")
+    hub = BroadcastHub()
+    app.state.hub = hub
+    app.state.stt = stt
+    app.state.translator = translator
+    # Build eagerly when both deps are already supplied (e.g. tests injecting
+    # stubs via a bare TestClient) so we don't depend on the ASGI lifespan
+    # "startup" event having fired. Real deployments pass stt=translator=None
+    # and the pipeline is built lazily below once startup loads the models.
+    app.state.pipeline = (
+        UtterancePipeline(stt, translator, hub) if stt is not None and translator is not None else None
+    )
 
-    def __init__(self, model_name=NLLB_MODEL_NAME):
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"Loading NLLB translation model on {device}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
-        self.device = device
-        self.lock = asyncio.Lock()
-        logger.info("NLLB model loaded.")
+    @app.on_event("startup")
+    async def startup():
+        if app.state.stt is None:
+            from stt import WhisperSTT
+            app.state.stt = WhisperSTT()
+        if app.state.translator is None:
+            from translator import load_translator
+            app.state.translator = load_translator()
+        if app.state.pipeline is None:
+            app.state.pipeline = UtterancePipeline(app.state.stt, app.state.translator, hub)
+        logger.info("Server ready on http://%s:%d", HOST, PORT)
 
-    async def translate(self, text, source_lang, target_lang):
-        if not text or source_lang == target_lang:
-            return text
-        async with self.lock:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, self._translate_sync, text, source_lang, target_lang)
-
-    def _translate_sync(self, text, source_lang, target_lang):
-        src_code = self.LANG_MAP.get(source_lang, "eng_Latn")
-        tgt_code = self.LANG_MAP.get(target_lang, "mal_Mlym")
-
-        self.tokenizer.src_lang = src_code
-        inputs = self.tokenizer(
-            text, return_tensors="pt", padding=True, truncation=True, max_length=512
-        ).to(self.device)
-
-        tgt_lang_id = self.tokenizer.convert_tokens_to_ids(tgt_code)
-
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                forced_bos_token_id=tgt_lang_id,
-                max_new_tokens=512,
-            )
-
-        translated = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
-        return translated
-
-
-# ============================================================
-# AUDIO BUFFER with Silence Detection
-# ============================================================
-class AudioBuffer:
-    def __init__(self, sample_rate=SAMPLE_RATE):
-        self.sample_rate = sample_rate
-        self.buffer = bytearray()
-        self.last_speech_time = time.time()
-
-    def add_chunk(self, pcm_bytes):
-        self.buffer.extend(pcm_bytes)
-
-    def duration_seconds(self):
-        return len(self.buffer) / (self.sample_rate * 2)  # 2 bytes per int16 sample
-
-    def has_trailing_silence(self):
-        """Check if the end of the buffer has silence."""
-        check_samples = int(SILENCE_DURATION_S * self.sample_rate)
-        check_bytes = check_samples * 2
-
-        if len(self.buffer) < check_bytes:
-            return False
-
-        tail = np.frombuffer(self.buffer[-check_bytes:], dtype=np.int16)
-        rms = np.sqrt(np.mean(tail.astype(np.float32) ** 2))
-        return rms < SILENCE_THRESHOLD
-
-    def should_process(self):
-        duration = self.duration_seconds()
-        if duration < MIN_SPEECH_S:
-            return False
-        if duration >= MAX_BUFFER_S:
-            return True
-        if duration >= 1.5 and self.has_trailing_silence():
-            return True
-        return False
-
-    def get_audio_and_clear(self):
-        audio_np = np.frombuffer(bytes(self.buffer), dtype=np.int16)
-        self.buffer.clear()
-        return audio_np
-
-    def clear(self):
-        self.buffer.clear()
-
-
-# ============================================================
-# FASTAPI APP
-# ============================================================
-app = FastAPI(title="Live Translation Server")
-
-# Global model instances
-whisper_stt: WhisperSTT = None
-nllb_translator: NLLBTranslator = None
-
-
-@app.on_event("startup")
-async def startup():
-    global whisper_stt, nllb_translator
-    whisper_stt = WhisperSTT()
-    nllb_translator = NLLBTranslator()
-    logger.info(f"Server ready on http://{HOST}:{PORT}")
-    logger.info("Open this URL on your tablet browser to start translating.")
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
-    await ws.accept()
-    logger.info("Client connected.")
-
-    config = {"source_lang": "en", "target_lang": "ml", "sample_rate": SAMPLE_RATE}
-    audio_buf = AudioBuffer(SAMPLE_RATE)
-
-    await ws.send_json({"type": "status", "status": "ready", "message": "Connected to server"})
-
-    try:
-        while True:
-            message = await ws.receive()
-
-            # Text message = JSON config/control
-            if "text" in message:
-                try:
-                    msg = json.loads(message["text"])
-                    msg_type = msg.get("type", "")
-
-                    if msg_type == "config":
-                        config["source_lang"] = msg.get("sourceLang", config["source_lang"])
-                        config["target_lang"] = msg.get("targetLang", config["target_lang"])
-                        config["sample_rate"] = msg.get("sampleRate", config["sample_rate"])
-                        audio_buf.sample_rate = config["sample_rate"]
-                        logger.info(f"Config updated: {config}")
-                        await ws.send_json({"type": "config_ack", "config": config})
-
-                    elif msg_type == "clear":
-                        audio_buf.clear()
-                        await ws.send_json({"type": "cleared"})
-
-                except json.JSONDecodeError:
-                    pass
-
-            # Binary message = audio PCM data
-            elif "bytes" in message:
-                pcm_data = message["bytes"]
-                audio_buf.add_chunk(pcm_data)
-
-                if audio_buf.should_process():
-                    await ws.send_json({"type": "status", "status": "processing"})
-
-                    audio_np = audio_buf.get_audio_and_clear()
-
-                    # Transcribe
-                    t0 = time.time()
-                    original = await whisper_stt.transcribe(audio_np, config["source_lang"])
-                    t_stt = time.time() - t0
-
-                    if not original:
-                        await ws.send_json({"type": "status", "status": "listening"})
+    @app.websocket("/ws/mic")
+    async def ws_mic(ws: WebSocket):
+        await ws.accept()
+        logger.info("Mic connected.")
+        buf = AudioBuffer(SAMPLE_RATE)
+        await ws.send_json({"type": "status", "state": "ready"})
+        try:
+            while True:
+                message = await ws.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                if "text" in message and message["text"] is not None:
+                    try:
+                        msg = json.loads(message["text"])
+                    except json.JSONDecodeError:
                         continue
+                    if msg.get("type") == "config":
+                        buf.sample_rate = msg.get("sampleRate", SAMPLE_RATE)
+                    elif msg.get("type") == "clear":
+                        buf.clear()
+                elif "bytes" in message and message["bytes"] is not None:
+                    buf.add_chunk(message["bytes"])
+                    if buf.should_process():
+                        await ws.send_json({"type": "status", "state": "processing"})
+                        await app.state.hub.publish_status("processing")
+                        result = await app.state.pipeline.process(buf.get_audio_and_clear())
+                        if result:
+                            await ws.send_json({"type": "sentence", "en": result[1]})
+                        await ws.send_json({"type": "status", "state": "listening"})
+                        await app.state.hub.publish_status("listening")
+        except WebSocketDisconnect:
+            pass
+        logger.info("Mic disconnected.")
 
-                    # Translate
-                    t1 = time.time()
-                    translated = await nllb_translator.translate(
-                        original, config["source_lang"], config["target_lang"]
-                    )
-                    t_translate = time.time() - t1
+    @app.websocket("/ws/captions")
+    async def ws_captions(ws: WebSocket):
+        await ws.accept()
+        await hub.register(ws)
+        logger.info("Screen connected (%d total).", len(hub._clients))
+        try:
+            while True:
+                await ws.receive_text()  # keepalive/no-op; raises on disconnect
+        except WebSocketDisconnect:
+            pass
+        finally:
+            hub.unregister(ws)
+            logger.info("Screen disconnected (%d left).", len(hub._clients))
 
-                    logger.info(
-                        f"STT({t_stt:.2f}s): '{original}' → "
-                        f"Translate({t_translate:.2f}s): '{translated}'"
-                    )
+    @app.get("/")
+    async def root():
+        return RedirectResponse("/display")
 
-                    await ws.send_json({
-                        "type": "translation",
-                        "original": original,
-                        "translated": translated,
-                        "timing": {"stt": round(t_stt, 2), "translate": round(t_translate, 2)},
-                    })
+    @app.get("/mic")
+    async def mic_page():
+        return FileResponse(STATIC_DIR / "mic.html")
 
-                    await ws.send_json({"type": "status", "status": "listening"})
+    @app.get("/display")
+    async def display_page():
+        return FileResponse(STATIC_DIR / "display.html")
 
-    except WebSocketDisconnect:
-        logger.info("Client disconnected.")
-    except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+    @app.get("/view")
+    async def view_page():
+        return FileResponse(STATIC_DIR / "view.html")
 
-
-# Serve static files (the client frontend)
-STATIC_DIR = Path(__file__).parent
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-@app.get("/")
-async def serve_client():
-    return FileResponse(STATIC_DIR / "client.html")
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    return app
 
 
-@app.get("/styles.css")
-async def serve_css():
-    return FileResponse(STATIC_DIR / "styles.css")
+app = create_app()
 
-
-@app.get("/client.js")
-async def serve_js():
-    return FileResponse(STATIC_DIR / "client.js")
-
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 if __name__ == "__main__":
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
