@@ -6,3 +6,6 @@ transformers
 sentencepiece
 numpy
 torch
+IndicTransToolkit
+pytest
+pytest-asyncio
