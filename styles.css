@@ -1,0 +1,654 @@
+/* ============================================================
+   Live Translation App — Church Display
+   Design System & Styles
+   ============================================================ */
+
+/* --- Google Fonts: Noto Sans (excellent Indic script coverage) --- */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,300;0,400;0,600;0,700;0,800&family=Noto+Sans+Malayalam:wght@400;700&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Sans+Telugu:wght@400;700&display=swap');
+
+/* --- CSS Custom Properties (Design Tokens) --- */
+:root {
+  /* Background */
+  --bg-primary: #06060a;
+  --bg-secondary: #0f0f18;
+  --bg-card: #12121e;
+  --bg-glass: rgba(255, 255, 255, 0.04);
+  --bg-glass-hover: rgba(255, 255, 255, 0.08);
+
+  /* Text */
+  --text-primary: #f0f0f5;
+  --text-secondary: #9ca3af;
+  --text-muted: #5b6078;
+  --text-interim: #6366f1;
+
+  /* Accent */
+  --accent-indigo: #6366f1;
+  --accent-violet: #8b5cf6;
+  --accent-gradient: linear-gradient(135deg, #6366f1, #8b5cf6);
+  --accent-glow: rgba(99, 102, 241, 0.3);
+
+  /* Status Colors */
+  --status-idle: #6b7280;
+  --status-listening: #22c55e;
+  --status-translating: #f59e0b;
+  --status-error: #ef4444;
+
+  /* Sizing */
+  --translated-font-size: 56px;
+  --source-font-size: 20px;
+  --header-height: 56px;
+  --controls-height: 64px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-pill: 9999px;
+
+  /* Shadows */
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.15);
+  --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.4);
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* --- Reset & Base --- */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: 'Noto Sans', 'Noto Sans Malayalam', 'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- Subtle Background Texture --- */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(99, 102, 241, 0.06) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.04) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ============================================================
+   HEADER
+   ============================================================ */
+.header {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  height: var(--header-height);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.header__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header__icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-gradient);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+}
+
+.header__title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* --- Status Indicator --- */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-glass);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: all var(--transition-normal);
+}
+
+.status__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-idle);
+  transition: background var(--transition-normal);
+}
+
+.status[data-status="listening"] {
+  border-color: rgba(34, 197, 94, 0.2);
+  color: var(--status-listening);
+}
+
+.status[data-status="listening"] .status__dot {
+  background: var(--status-listening);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.status[data-status="translating"] {
+  border-color: rgba(245, 158, 11, 0.2);
+  color: var(--status-translating);
+}
+
+.status[data-status="translating"] .status__dot {
+  background: var(--status-translating);
+  animation: pulse-dot 0.8s ease-in-out infinite;
+}
+
+.status[data-status="error"] {
+  border-color: rgba(239, 68, 68, 0.2);
+  color: var(--status-error);
+}
+
+.status[data-status="error"] .status__dot {
+  background: var(--status-error);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.4); }
+}
+
+/* --- Settings Button --- */
+.btn-settings {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-settings:hover {
+  color: var(--text-primary);
+  background: var(--bg-glass-hover);
+}
+
+.header__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ============================================================
+   CONTROLS BAR
+   ============================================================ */
+.controls {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px 20px;
+  height: var(--controls-height);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* --- Language Buttons --- */
+.lang-group {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-lang {
+  position: relative;
+  padding: 8px 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  white-space: nowrap;
+}
+
+.btn-lang:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.btn-lang.active {
+  background: var(--accent-gradient);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: var(--shadow-glow);
+}
+
+.btn-lang.active::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  z-index: -1;
+  opacity: 0.3;
+  filter: blur(8px);
+}
+
+/* --- Action Buttons --- */
+.action-group {
+  display: flex;
+  gap: 8px;
+  margin-left: 12px;
+}
+
+.btn-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-glass);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-normal);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  white-space: nowrap;
+}
+
+.btn-action:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+
+.btn-action--start {
+  border-color: rgba(34, 197, 94, 0.3);
+  color: var(--status-listening);
+}
+
+.btn-action--start:hover {
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.5);
+}
+
+.btn-action--stop {
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--status-error);
+}
+
+.btn-action--stop:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.btn-action--clear {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ============================================================
+   SETTINGS PANEL (Collapsible)
+   ============================================================ */
+.settings-panel {
+  position: relative;
+  z-index: 10;
+  max-height: 0;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid transparent;
+  transition: max-height var(--transition-slow), border-color var(--transition-normal);
+}
+
+.settings-panel.open {
+  max-height: 120px;
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+.settings-panel__inner {
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-panel__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.settings-panel .lang-group .btn-lang {
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
+/* ============================================================
+   MAIN DISPLAY AREA
+   ============================================================ */
+.display {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 32px 28px;
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+.display::-webkit-scrollbar {
+  width: 6px;
+}
+
+.display::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.display::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.display::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* --- Translation Segment --- */
+.segment {
+  margin-bottom: 28px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  animation: segment-enter 0.5s var(--transition-slow) both;
+}
+
+.segment:last-child {
+  border-bottom: none;
+}
+
+@keyframes segment-enter {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.segment__translated {
+  font-size: var(--translated-font-size);
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--text-primary);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.segment__original {
+  margin-top: 10px;
+  font-size: var(--source-font-size);
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text-muted);
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* --- Interim (live typing) indicator --- */
+.interim-block {
+  padding: 16px 0;
+}
+
+.interim-block__text {
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--text-interim);
+  opacity: 0.7;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.interim-block__cursor {
+  display: inline-block;
+  width: 3px;
+  height: 1em;
+  background: var(--accent-indigo);
+  margin-left: 4px;
+  vertical-align: text-bottom;
+  animation: blink-cursor 1s step-end infinite;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* --- Empty State --- */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 40px;
+}
+
+.empty-state__icon {
+  font-size: 56px;
+  opacity: 0.3;
+}
+
+.empty-state__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.empty-state__desc {
+  font-size: 15px;
+  line-height: 1.6;
+  max-width: 400px;
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.footer {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 20px;
+  background: var(--bg-secondary);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.footer__info {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.footer__source-lang {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.footer__provider {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* ============================================================
+   ERROR TOAST
+   ============================================================ */
+.toast {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  padding: 12px 24px;
+  background: rgba(239, 68, 68, 0.9);
+  color: #fff;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 600;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  opacity: 0;
+  pointer-events: none;
+  transition: all var(--transition-normal);
+  z-index: 100;
+  text-align: center;
+  max-width: 90%;
+}
+
+.toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+
+/* ============================================================
+   RESPONSIVE — Tablets & Smaller Screens
+   ============================================================ */
+@media (max-width: 768px) {
+  :root {
+    --translated-font-size: 40px;
+    --source-font-size: 16px;
+    --header-height: 48px;
+    --controls-height: auto;
+  }
+
+  .controls {
+    padding: 8px 12px;
+    gap: 6px;
+  }
+
+  .btn-lang {
+    padding: 6px 14px;
+    font-size: 13px;
+  }
+
+  .btn-action {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+
+  .display {
+    padding: 20px 16px;
+  }
+
+  .segment {
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+  }
+
+  .action-group {
+    margin-left: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  :root {
+    --translated-font-size: 32px;
+    --source-font-size: 15px;
+  }
+
+  .controls {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .action-group {
+    margin-left: 0;
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ============================================================
+   FULLSCREEN MODE (for projection)
+   ============================================================ */
+body.fullscreen-mode .header,
+body.fullscreen-mode .controls,
+body.fullscreen-mode .settings-panel,
+body.fullscreen-mode .footer {
+  display: none;
+}
+
+body.fullscreen-mode .display {
+  padding: 48px 40px;
+}
+
+body.fullscreen-mode .segment__translated {
+  font-size: 72px;
+}
+
+body.fullscreen-mode .segment__original {
+  font-size: 24px;
+}
