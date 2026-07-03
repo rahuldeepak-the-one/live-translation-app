@@ -14,14 +14,6 @@ const els = {
 };
 els.viewUrl.textContent = `http://${window.location.host}/view`;
 
-function upsert(sentence) {
-  const i = state.sentences.findIndex((s) => s.id === sentence.id);
-  if (i >= 0) state.sentences[i] = { ...state.sentences[i], ...sentence };
-  else state.sentences.push(sentence);
-  state.sentences = state.sentences.slice(-SHOW_LAST);
-  render();
-}
-
 function render() {
   els.empty.style.display = state.sentences.length ? "none" : "";
   els.captions.querySelectorAll(".caption-row").forEach((n) => n.remove());
@@ -49,28 +41,55 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws/captions`);
 
+  // Events received on THIS connection before its history snapshot arrives.
+  // Replayed on top of history: handles both the registration race (live
+  // event before history) and server restarts (stale pre-reconnect state
+  // must be discarded, and ids from a previous server session mean nothing).
+  const connSentences = [];
+  const connTranslations = [];
+  let gotHistory = false;
+
+  function applySentence(s) {
+    const i = state.sentences.findIndex((x) => x.id === s.id);
+    if (i >= 0) state.sentences[i].en = s.en;
+    else state.sentences.push({ id: s.id, en: s.en, translations: null });
+  }
+
+  function applyTranslation(id, translations) {
+    const row = state.sentences.find((x) => x.id === id);
+    if (row) row.translations = translations;
+  }
+
+  function finalize() {
+    state.sentences = state.sentences.slice(-SHOW_LAST);
+    render();
+  }
+
   ws.onopen = () => {
     els.dot.classList.add("connected");
     els.statusText.textContent = "live";
   };
+
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "history") {
-      for (const s of msg.sentences) {
-        const i = state.sentences.findIndex((x) => x.id === s.id);
-        if (i >= 0) state.sentences[i] = { ...state.sentences[i], ...s };
-        else state.sentences.push(s);
-      }
-      state.sentences.sort((a, b) => a.id - b.id);
-      state.sentences = state.sentences.slice(-SHOW_LAST);
-      render();
+      state.sentences = msg.sentences.map((s) => ({ ...s }));
+      connSentences.forEach(applySentence);
+      connTranslations.forEach(([id, t]) => applyTranslation(id, t));
+      gotHistory = true;
+      finalize();
     } else if (msg.type === "sentence") {
-      upsert({ id: msg.id, en: msg.en, translations: null });
+      if (!gotHistory) connSentences.push({ id: msg.id, en: msg.en });
+      applySentence({ id: msg.id, en: msg.en });
+      finalize();
     } else if (msg.type === "translation") {
       const { type, id, ...translations } = msg;
-      upsert({ id, translations });
+      if (!gotHistory) connTranslations.push([id, translations]);
+      applyTranslation(id, translations);
+      finalize();
     }
   };
+
   ws.onclose = () => {
     els.dot.classList.remove("connected");
     els.statusText.textContent = "reconnecting…";
