@@ -13,8 +13,9 @@ class BroadcastHub:
         self._history = deque(maxlen=history_size)
 
     async def register(self, ws):
-        await ws.send_json({"type": "history", "sentences": list(self._history)})
+        snapshot = list(self._history)
         self._clients.add(ws)
+        await ws.send_json({"type": "history", "sentences": snapshot})
 
     def unregister(self, ws):
         self._clients.discard(ws)

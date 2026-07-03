@@ -72,3 +72,31 @@ async def test_unregister_stops_delivery():
     hub.unregister(ws)
     await hub.publish_status("listening")
     assert len(ws.sent) == 1  # only the history replay
+
+
+async def test_sentence_published_during_registration_not_lost():
+    hub = BroadcastHub()
+
+    class SlowJoinWS(FakeWS):
+        """Publishes a sentence mid-registration (while history is being sent)."""
+        def __init__(self, hub):
+            super().__init__()
+            self.hub = hub
+            self._first = True
+
+        async def send_json(self, msg):
+            if self._first:
+                self._first = False
+                await self.hub.publish_sentence(99, "mid-join sentence")
+            await super().send_json(msg)
+
+    ws = SlowJoinWS(hub)
+    await hub.register(ws)
+    # The sentence must reach the client somehow: live broadcast or history.
+    got_live = any(m.get("type") == "sentence" and m.get("id") == 99 for m in ws.sent)
+    in_history = any(
+        s["id"] == 99
+        for m in ws.sent if m.get("type") == "history"
+        for s in m["sentences"]
+    )
+    assert got_live or in_history
