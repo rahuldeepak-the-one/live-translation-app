@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 websockets
 faster-whisper
-transformers
+transformers<5  # IndicTransToolkit imports transformers.tokenization_utils.PreTrainedTokenizerBase, removed in transformers 5.x
 sentencepiece
 numpy
 torch
