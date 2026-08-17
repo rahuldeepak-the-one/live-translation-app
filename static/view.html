@@ -1,1 +1,35 @@
-<!DOCTYPE html><html><head><title>view</title></head><body>view placeholder</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Translation — My Language</title>
+  <link rel="stylesheet" href="/static/common.css">
+  <style>
+    main { font-size: 1.5rem; }
+    #picker { display: flex; gap: 0.5rem; padding: 0.8rem 1.2rem; flex-wrap: wrap; }
+    #picker button {
+      flex: 1; min-width: 5.5rem; padding: 0.7rem 0.4rem; font-size: 1rem;
+      background: #16202b; color: #e8eef5; border: 1px solid #2b3948;
+      border-radius: 0.5rem; cursor: pointer;
+    }
+    #picker button.active { background: #1d4ed8; border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+  <header>
+    <span><span id="status-dot"></span><span id="status-text">connecting…</span></span>
+    <span>Live Translation</span>
+  </header>
+  <nav id="picker">
+    <button data-lang="en">English</button>
+    <button data-lang="ml">മലയാളം</button>
+    <button data-lang="te">తెలుగు</button>
+    <button data-lang="hi">हिन्दी</button>
+  </nav>
+  <main id="captions">
+    <div class="empty-state" id="empty">Waiting for the speaker…</div>
+  </main>
+  <script src="/static/view.js"></script>
+</body>
+</html>
