@@ -52,8 +52,9 @@ else:
 # --- Show local IP for tablet connection ---
 echo ""
 LOCAL_IP=$(hostname -I | awk '{print $1}')
-echo "📱 Open this URL on your tablet:"
-echo "   http://${LOCAL_IP}:8080"
+echo "📺 Projector/tablet:  http://${LOCAL_IP}:8080/display"
+echo "📱 Personal phones:   http://${LOCAL_IP}:8080/view"
+echo "🎤 Microphone page:   http://${LOCAL_IP}:8080/mic"
 echo ""
 echo "🎤 Starting server..."
 echo "======================================"

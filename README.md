@@ -48,7 +48,10 @@ Design approved 2026-07-04 — see [`docs/superpowers/specs/2026-07-04-church-tr
 | File | Role |
 |---|---|
 | `server.py` | FastAPI + WebSocket server, Whisper + translation pipeline |
-| `client.html` / `client.js` / `styles.css` | current browser client (mic capture + caption display) |
+| `config.py` | every tunable (models, thresholds, port) |
+| `stt.py` / `translator.py` / `pipeline.py` / `hub.py` / `audio_buffer.py` | the five pipeline modules |
+| `static/mic.*`, `static/display.*`, `static/view.*` | the three web pages |
+| `tests/` | fast unit tests + `-m slow` model tests |
 | `start.sh` | one-command startup |
 | `archive/` | first prototype (browser-only, cloud translation) — superseded |
 | `docs/superpowers/specs/` | design documents |
