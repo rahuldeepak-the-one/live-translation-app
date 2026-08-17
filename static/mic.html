@@ -1,1 +1,93 @@
-<!DOCTYPE html><html><head><title>mic</title></head><body>mic placeholder</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="Live speech translation — self-hosted with Whisper + NLLB on local GPU">
+  <meta name="theme-color" content="#06060a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Live Translation — Church Display</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="header" id="header">
+    <div class="header__brand">
+      <div class="header__icon">🎤</div>
+      <h1 class="header__title">Live Translation</h1>
+    </div>
+    <div class="header__right">
+      <div class="status" id="status-badge" data-status="idle">
+        <span class="status__dot"></span>
+        <span id="status-label">Idle</span>
+      </div>
+      <button class="btn-settings" id="btn-settings" aria-label="Settings" title="Source language settings">⚙</button>
+    </div>
+  </header>
+
+  <!-- SETTINGS PANEL -->
+  <div class="settings-panel" id="settings-panel">
+    <div class="settings-panel__inner">
+      <span class="settings-panel__label">Source Language</span>
+      <div class="lang-group">
+        <button class="btn-lang active" data-source-lang="en" id="src-lang-en">English</button>
+        <button class="btn-lang" data-source-lang="ml" id="src-lang-ml">മലയാളം</button>
+        <button class="btn-lang" data-source-lang="hi" id="src-lang-hi">हिन्दी</button>
+        <button class="btn-lang" data-source-lang="te" id="src-lang-te">తెలుగు</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONTROLS -->
+  <div class="controls" id="controls">
+    <div class="lang-group">
+      <button class="btn-lang active" data-target-lang="ml" id="target-lang-ml">Malayalam</button>
+      <button class="btn-lang" data-target-lang="hi" id="target-lang-hi">Hindi</button>
+      <button class="btn-lang" data-target-lang="te" id="target-lang-te">Telugu</button>
+    </div>
+    <div class="action-group">
+      <button class="btn-action btn-action--start" id="btn-start" title="Start listening (Space)">▶ Start</button>
+      <button class="btn-action btn-action--stop" id="btn-stop" style="display:none;" title="Stop listening (Space)">⏹ Stop</button>
+      <button class="btn-action btn-action--clear" id="btn-clear" title="Clear display (Esc)">🗑 Clear</button>
+    </div>
+  </div>
+
+  <!-- DISPLAY AREA -->
+  <main class="display" id="display-area">
+    <div class="empty-state" id="empty-state">
+      <div class="empty-state__icon">🧠</div>
+      <div class="empty-state__title">Self-Hosted Translation</div>
+      <div class="empty-state__desc">
+        Running Whisper + NLLB on local GPU.<br>
+        Tap <strong>Start</strong> and speak into the microphone.<br><br>
+        <em>Shortcuts: Space = Start/Stop · Esc = Clear · F = Fullscreen</em>
+      </div>
+    </div>
+    <div class="interim-block" id="interim-block" style="display:none;">
+      <span class="interim-block__text"></span>
+      <span class="interim-block__cursor"></span>
+    </div>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="footer" id="footer">
+    <div class="footer__info">
+      <span id="conn-dot" style="width:8px;height:8px;border-radius:50%;background:#ef4444;display:inline-block;"></span>
+      <span id="conn-label" style="font-size:12px;color:var(--text-muted);">Connecting...</span>
+      <span style="margin:0 8px;color:var(--text-muted);">·</span>
+      <span>Source:</span>
+      <span class="footer__source-lang" id="footer-source-lang">English</span>
+    </div>
+    <div class="footer__provider" id="footer-provider">Local GPU (Whisper + NLLB)</div>
+  </footer>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/mic.js"></script>
+</body>
+</html>

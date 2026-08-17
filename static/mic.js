@@ -167,7 +167,7 @@ class ServerConnection {
   connect() {
     this._shouldReconnect = true;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${window.location.host}/ws`;
+    const url = `${protocol}//${window.location.host}/ws/mic`;
 
     try {
       this.ws = new WebSocket(url);
@@ -191,11 +191,11 @@ class ServerConnection {
         const msg = JSON.parse(event.data);
 
         switch (msg.type) {
-          case 'translation':
+          case 'sentence':
             if (this.onTranslation) this.onTranslation(msg);
             break;
           case 'status':
-            if (this.onStatus) this.onStatus(msg.status, msg.message);
+            if (this.onStatus) this.onStatus(msg.state, msg.message);
             break;
           case 'config_ack':
             console.log('Config acknowledged:', msg.config);
@@ -423,7 +423,7 @@ class ClientApp {
 
     this.conn.onTranslation = (msg) => {
       this.display.showInterim('');
-      this.display.addSegment(msg.original, msg.translated, msg.timing);
+      this.display.addSegment(msg.en, 'heard ✓', null);
     };
 
     this.conn.onStatus = (status, message) => {
