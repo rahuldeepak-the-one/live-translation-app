@@ -100,3 +100,27 @@ async def test_sentence_published_during_registration_not_lost():
         for s in m["sentences"]
     )
     assert got_live or in_history
+
+
+async def test_republishing_a_sentence_updates_history_in_place():
+    """Extending a held sentence must revise the row, not append a duplicate."""
+    hub = BroadcastHub()
+    await hub.publish_sentence(1, "But the translations")
+    await hub.publish_sentence(1, "But the translations are good.")
+    late = FakeWS()
+    await hub.register(late)
+    assert late.sent[0]["sentences"] == [
+        {"id": 1, "en": "But the translations are good.", "translations": None}
+    ]
+
+
+async def test_republishing_preserves_existing_translations():
+    hub = BroadcastHub()
+    await hub.publish_sentence(1, "Hello.")
+    await hub.publish_translation(1, {"ml": "M", "te": "T", "hi": "H"})
+    await hub.publish_sentence(1, "Hello there.")
+    late = FakeWS()
+    await hub.register(late)
+    row = late.sent[0]["sentences"][0]
+    assert row["en"] == "Hello there."
+    assert row["translations"] == {"ml": "M", "te": "T", "hi": "H"}

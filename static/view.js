@@ -1,24 +1,46 @@
-/* Personal phone view: one chosen language, remembered across visits. */
-const KEEP_LAST = 10;
+/* Personal phone view: one chosen language, rendered as a flowing transcript.
+ *
+ * Three things this file is careful about:
+ *   1. Rendering is incremental. A full rebuild would reset scrollTop on every
+ *      message, which defeats reading back through the service.
+ *   2. Autoscroll only happens if you were already at the live edge. Scrolled
+ *      up to re-read something? You stay where you are.
+ *   3. A sentence that isn't translated yet shows its English in grey rather
+ *      than a placeholder, so the page never looks stalled while the server
+ *      waits for the sentence to finish.
+ */
+const MAX_SENTENCES = 2000;      // whole service; guard against unbounded DOM
+const LIVE_EDGE_PX = 80;         // "close enough to the bottom" for autoscroll
+const SIZE_STEPS = ["1.1rem", "1.3rem", "1.5rem", "1.8rem", "2.2rem", "2.7rem"];
 
 const state = {
   lang: localStorage.getItem("lang") || "ml",
-  sentences: [],  // [{id, en, translations|null}]
+  sizeStep: Number(localStorage.getItem("sizeStep") ?? 2),
+  order: [],                     // sentence ids, oldest first
+  sentences: new Map(),          // id -> {id, en, translations|null}
 };
+const spans = new Map();         // id -> HTMLSpanElement
+
 const els = {
   captions: document.getElementById("captions"),
+  transcript: document.getElementById("transcript"),
   empty: document.getElementById("empty"),
   dot: document.getElementById("status-dot"),
   statusText: document.getElementById("status-text"),
+  jumpLive: document.getElementById("jump-live"),
+  smaller: document.getElementById("text-smaller"),
+  bigger: document.getElementById("text-bigger"),
   buttons: document.querySelectorAll("#picker button"),
 };
+
+/* ---------------------------------------------------------------- language */
 
 els.buttons.forEach((btn) => {
   btn.addEventListener("click", () => {
     state.lang = btn.dataset.lang;
     localStorage.setItem("lang", state.lang);
     updatePicker();
-    render();
+    rebuild();
   });
 });
 
@@ -26,29 +48,131 @@ function updatePicker() {
   els.buttons.forEach((b) => b.classList.toggle("active", b.dataset.lang === state.lang));
 }
 
-function textFor(s) {
-  if (state.lang === "en") return s.en;
-  return s.translations?.[state.lang] || null;  // null -> still translating
+/* -------------------------------------------------------------- text size */
+
+function applySize() {
+  state.sizeStep = Math.max(0, Math.min(SIZE_STEPS.length - 1, state.sizeStep));
+  document.documentElement.style.setProperty("--caption-size", SIZE_STEPS[state.sizeStep]);
+  localStorage.setItem("sizeStep", String(state.sizeStep));
+  els.smaller.disabled = state.sizeStep === 0;
+  els.bigger.disabled = state.sizeStep === SIZE_STEPS.length - 1;
 }
 
-function render() {
-  els.empty.style.display = state.sentences.length ? "none" : "";
-  els.captions.querySelectorAll(".caption-row").forEach((n) => n.remove());
-  for (const s of state.sentences) {
-    const text = textFor(s);
-    const row = document.createElement("div");
-    row.className = "caption-row";
-    const line = document.createElement("div");
-    line.className = "lang-line" + (text ? "" : " pending");
-    const textEl = document.createElement("span");
-    textEl.className = "lang-text";
-    textEl.textContent = text || "…";
-    line.appendChild(textEl);
-    row.appendChild(line);
-    els.captions.appendChild(row);
-  }
+function stepSize(delta) {
+  const atEdge = atLiveEdge();
+  state.sizeStep += delta;
+  applySize();
+  if (atEdge) scrollToLive();       // resizing reflows; keep the live edge visible
+}
+
+els.smaller.addEventListener("click", () => stepSize(-1));
+els.bigger.addEventListener("click", () => stepSize(+1));
+
+/* ---------------------------------------------------------------- scrolling */
+
+function atLiveEdge() {
+  const c = els.captions;
+  return c.scrollHeight - c.clientHeight - c.scrollTop <= LIVE_EDGE_PX;
+}
+
+function scrollToLive() {
   els.captions.scrollTop = els.captions.scrollHeight;
 }
+
+function updateJumpLive() {
+  els.jumpLive.hidden = atLiveEdge();
+}
+
+els.captions.addEventListener("scroll", updateJumpLive);
+els.jumpLive.addEventListener("click", () => {
+  scrollToLive();
+  updateJumpLive();
+});
+
+/* ---------------------------------------------------------------- rendering */
+
+function textFor(s) {
+  if (state.lang === "en") return { text: s.en, awaiting: false };
+  const translated = s.translations?.[state.lang];
+  // No translation yet — show the English rather than an empty gap. The server
+  // holds a sentence until it is complete, so this is the sentence still being
+  // spoken; it is replaced in place the moment the translation arrives.
+  return translated
+    ? { text: translated, awaiting: false }
+    : { text: s.en, awaiting: true };
+}
+
+function paint(span, s) {
+  const { text, awaiting } = textFor(s);
+  span.textContent = `${text} `;   // trailing space so the paragraph wraps naturally
+  span.classList.toggle("awaiting", awaiting);
+}
+
+function upsert(s) {
+  let span = spans.get(s.id);
+  if (!span) {
+    span = document.createElement("span");
+    span.dataset.sid = String(s.id);
+    spans.set(s.id, span);
+    els.transcript.appendChild(span);
+  }
+  paint(span, s);
+}
+
+function markLive() {
+  const newest = state.order[state.order.length - 1];
+  for (const [id, span] of spans) span.classList.toggle("live", id === newest);
+}
+
+function trim() {
+  while (state.order.length > MAX_SENTENCES) {
+    const id = state.order.shift();
+    state.sentences.delete(id);
+    spans.get(id)?.remove();
+    spans.delete(id);
+  }
+}
+
+function rebuild() {
+  els.transcript.textContent = "";
+  spans.clear();
+  for (const id of state.order) upsert(state.sentences.get(id));
+  markLive();
+  els.empty.style.display = state.order.length ? "none" : "";
+  scrollToLive();
+  updateJumpLive();
+}
+
+/* Apply a change, then autoscroll only if we were already at the live edge.
+   The check must happen BEFORE the DOM grows, or everything looks "at bottom". */
+function update(mutate) {
+  const stick = atLiveEdge();
+  mutate();
+  trim();
+  markLive();
+  els.empty.style.display = state.order.length ? "none" : "";
+  if (stick) scrollToLive();
+  updateJumpLive();
+}
+
+/* ------------------------------------------------------------- wake lock */
+
+let wakeLock = null;
+
+async function keepScreenAwake() {
+  if (!("wakeLock" in navigator)) return;   // older iOS Safari — nothing to do
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+  } catch (err) {
+    /* Denied (often: tab not visible). Retried on the next visibility change. */
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") keepScreenAwake();
+});
+
+/* ------------------------------------------------------------- connection */
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -63,19 +187,24 @@ function connect() {
   let gotHistory = false;
 
   function applySentence(s) {
-    const i = state.sentences.findIndex((x) => x.id === s.id);
-    if (i >= 0) state.sentences[i].en = s.en;
-    else state.sentences.push({ id: s.id, en: s.en, translations: null });
+    const existing = state.sentences.get(s.id);
+    if (existing) {
+      // The server revises a held sentence in place as the speaker continues.
+      existing.en = s.en;
+      upsert(existing);
+      return;
+    }
+    const row = { id: s.id, en: s.en, translations: null };
+    state.sentences.set(s.id, row);
+    state.order.push(s.id);
+    upsert(row);
   }
 
   function applyTranslation(id, translations) {
-    const row = state.sentences.find((x) => x.id === id);
-    if (row) row.translations = translations;
-  }
-
-  function finalize() {
-    state.sentences = state.sentences.slice(-KEEP_LAST);
-    render();
+    const row = state.sentences.get(id);
+    if (!row) return;
+    row.translations = translations;
+    upsert(row);
   }
 
   ws.onopen = () => {
@@ -86,20 +215,24 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "history") {
-      state.sentences = msg.sentences.map((s) => ({ ...s }));
+      state.order = [];
+      state.sentences.clear();
+      for (const s of msg.sentences) {
+        state.sentences.set(s.id, { ...s });
+        state.order.push(s.id);
+      }
       connSentences.forEach(applySentence);
       connTranslations.forEach(([id, t]) => applyTranslation(id, t));
       gotHistory = true;
-      finalize();
+      trim();
+      rebuild();
     } else if (msg.type === "sentence") {
       if (!gotHistory) connSentences.push({ id: msg.id, en: msg.en });
-      applySentence({ id: msg.id, en: msg.en });
-      finalize();
+      update(() => applySentence({ id: msg.id, en: msg.en }));
     } else if (msg.type === "translation") {
       const { type, id, ...translations } = msg;
       if (!gotHistory) connTranslations.push([id, translations]);
-      applyTranslation(id, translations);
-      finalize();
+      update(() => applyTranslation(id, translations));
     }
   };
 
@@ -111,4 +244,7 @@ function connect() {
 }
 
 updatePicker();
+applySize();
+updateJumpLive();
+keepScreenAwake();
 connect();

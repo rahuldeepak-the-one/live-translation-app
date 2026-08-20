@@ -7,8 +7,12 @@
   <link rel="stylesheet" href="/static/common.css">
   <style>
     main { font-size: clamp(1.4rem, 3.4vw, 2.6rem); }
-    footer { padding: 0.5rem 1.2rem; color: #7d8fa3; font-size: 0.95rem;
-             border-top: 1px solid #1c2733; text-align: center; }
+    footer { padding: 0.6rem 1.2rem; color: #7d8fa3; font-size: 0.95rem;
+             border-top: 1px solid #1c2733; display: flex; gap: 1rem;
+             align-items: center; justify-content: center; }
+    #qr { width: 92px; height: 92px; background: #fff; padding: 4px;
+          border-radius: 6px; flex: 0 0 auto; }
+    footer strong { color: #e8eef5; }
   </style>
 </head>
 <body>
@@ -19,7 +23,10 @@
   <main id="captions">
     <div class="empty-state" id="empty">Waiting for the speaker…</div>
   </main>
-  <footer>On your phone: <strong id="view-url"></strong></footer>
+  <footer>
+    <img id="qr" src="/qr.svg" alt="QR code to the phone page">
+    <span>Scan, or type <strong id="view-url"></strong> on your phone</span>
+  </footer>
   <script src="/static/display.js"></script>
 </body>
 </html>

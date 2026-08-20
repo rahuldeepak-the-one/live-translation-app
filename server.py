@@ -14,14 +14,17 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from audio_buffer import AudioBuffer
 from config import HOST, PORT, SAMPLE_RATE
 from hub import BroadcastHub
+from netinfo import local_urls
+from qr import svg_for, view_url_for
 from pipeline import UtterancePipeline
+from transcript_log import TranscriptLog
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,7 +32,14 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 
 
-def create_app(stt=None, translator=None):
+def _fallback_view_url():
+    """Used when the Host header is missing or malformed."""
+    urls = local_urls(PORT)
+    base = urls[0][1] if urls else f"http://127.0.0.1:{PORT}"
+    return f"{base}/view"
+
+
+def create_app(stt=None, translator=None, transcript=None):
     @asynccontextmanager
     async def lifespan(application):
         if application.state.stt is None:
@@ -40,7 +50,8 @@ def create_app(stt=None, translator=None):
             application.state.translator = load_translator()
         if application.state.pipeline is None:
             application.state.pipeline = UtterancePipeline(
-                application.state.stt, application.state.translator, application.state.hub
+                application.state.stt, application.state.translator,
+                application.state.hub, transcript=application.state.transcript,
             )
         logger.info("Server ready on http://%s:%d", HOST, PORT)
         yield
@@ -50,13 +61,15 @@ def create_app(stt=None, translator=None):
     app.state.hub = hub
     app.state.stt = stt
     app.state.translator = translator
+    app.state.transcript = transcript if transcript is not None else TranscriptLog()
     # Build eagerly when both deps are already supplied (e.g. tests injecting
     # stubs via a bare TestClient) so we don't depend on the ASGI lifespan
     # "startup" event having fired. Real deployments pass stt=translator=None
     # and the pipeline is built lazily in lifespan once the models load; its
     # `is None` guards keep the two paths idempotent.
     app.state.pipeline = (
-        UtterancePipeline(stt, translator, hub) if stt is not None and translator is not None else None
+        UtterancePipeline(stt, translator, hub, transcript=app.state.transcript)
+        if stt is not None and translator is not None else None
     )
 
     @app.websocket("/ws/mic")
@@ -93,6 +106,11 @@ def create_app(stt=None, translator=None):
                             await ws.send_json({"type": "sentence", "en": result[1]})
                         await ws.send_json({"type": "status", "state": "listening"})
                         await app.state.hub.publish_status("listening")
+                    else:
+                        # Quiet chunk: the only chance to translate a sentence
+                        # the speaker started and never finished, since
+                        # process() runs on speech only.
+                        await app.state.pipeline.flush_if_stale()
         except WebSocketDisconnect:
             pass
         logger.info("Mic disconnected.")
@@ -118,6 +136,18 @@ def create_app(stt=None, translator=None):
     @app.get("/mic")
     async def mic_page():
         return FileResponse(STATIC_DIR / "mic.html")
+
+    @app.get("/qr.svg")
+    async def qr_svg(request: Request):
+        # Built from the Host the client actually used, so a tablet that
+        # reached us on 192.168.1.29 hands out that same address rather than
+        # whichever of this machine's thirteen IPs the server guessed.
+        url = view_url_for(request.headers.get("host", "")) or _fallback_view_url()
+        return Response(
+            svg_for(url),
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/display")
     async def display_page():

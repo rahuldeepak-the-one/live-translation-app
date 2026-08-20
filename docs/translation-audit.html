@@ -1,0 +1,680 @@
+<title>Luke 16 Translation Audit</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+Malayalam:wght@400;600&family=Noto+Sans+Telugu:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#E8EBE7; --card:#F8F9F7; --card-2:#F0F2EF;
+  --ink:#191C1A; --ink-soft:#5A6360; --ink-faint:#8B948F;
+  --madder:#A3312B; --madder-wash:#F3E3E1;
+  --verdigris:#2E6B5E; --verdigris-wash:#E0EBE7;
+  --ochre:#8A6414; --ochre-wash:#F2EBDA;
+  --rule:#CFD4CD; --rule-soft:#DFE3DD;
+  --serif:'Newsreader',Georgia,'Times New Roman',serif;
+  --sans:'IBM Plex Sans',system-ui,-apple-system,Segoe UI,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#141715; --card:#1C201D; --card-2:#22261F;
+    --ink:#E4E7E2; --ink-soft:#98A19C; --ink-faint:#6E766F;
+    --madder:#E4796F; --madder-wash:#2E1E1D;
+    --verdigris:#5FB39D; --verdigris-wash:#182722;
+    --ochre:#CBA047; --ochre-wash:#282218;
+    --rule:#2E332F; --rule-soft:#252A26;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#141715; --card:#1C201D; --card-2:#22261F;
+  --ink:#E4E7E2; --ink-soft:#98A19C; --ink-faint:#6E766F;
+  --madder:#E4796F; --madder-wash:#2E1E1D;
+  --verdigris:#5FB39D; --verdigris-wash:#182722;
+  --ochre:#CBA047; --ochre-wash:#282218;
+  --rule:#2E332F; --rule-soft:#252A26;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font-family:var(--sans);font-size:16.5px;line-height:1.62;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:930px;margin:0 auto;padding:0 22px 96px}
+p{margin:0 0 .9em}
+a{color:var(--verdigris)}
+code{font-family:var(--mono);font-size:.86em;background:var(--card-2);
+  padding:.12em .38em;border-radius:3px;border:1px solid var(--rule-soft)}
+em{font-style:italic}
+:focus-visible{outline:2px solid var(--verdigris);outline-offset:3px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ---- masthead ---- */
+header{padding:66px 0 0}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--ink-faint);margin:0 0 22px}
+h1{font-family:var(--serif);font-weight:500;font-size:clamp(38px,6.4vw,62px);
+  line-height:1.04;letter-spacing:-.021em;margin:0 0 18px;text-wrap:balance}
+h1 em{font-style:italic;color:var(--madder)}
+.standfirst{font-family:var(--serif);font-size:20.5px;line-height:1.5;
+  color:var(--ink-soft);max-width:60ch;margin:0 0 34px}
+
+.meta{display:flex;flex-wrap:wrap;gap:0;border-top:1px solid var(--ink);
+  border-bottom:1px solid var(--rule);padding:0;margin:0 0 58px}
+.meta div{flex:1 1 132px;padding:16px 18px 15px;border-right:1px solid var(--rule-soft)}
+.meta div:last-child{border-right:0}
+.meta dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--ink-faint);margin:0 0 5px}
+.meta dd{margin:0;font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
+
+/* ---- sections ---- */
+section{margin:0 0 62px;scroll-margin-top:20px}
+h2{font-family:var(--serif);font-weight:500;font-size:31px;line-height:1.18;
+  letter-spacing:-.014em;margin:0 0 6px;text-wrap:balance}
+.h2-num{font-family:var(--mono);font-size:11.5px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--madder);display:block;margin:0 0 9px}
+.lede{max-width:68ch;color:var(--ink-soft);font-size:16px;margin:0 0 26px}
+h3{font-family:var(--sans);font-weight:600;font-size:15px;letter-spacing:.005em;
+  margin:34px 0 10px}
+
+.verdict{background:var(--card);border:1px solid var(--rule);
+  border-left:3px solid var(--madder);padding:26px 28px;margin:0 0 12px}
+.verdict p{max-width:66ch}
+.verdict p:last-child{margin-bottom:0}
+.verdict strong{font-weight:600}
+
+/* ---- scorecard ---- */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(228px,1fr));gap:14px}
+.lcard{background:var(--card);border:1px solid var(--rule);padding:20px 21px 18px}
+.lcard h4{margin:0 0 2px;font-family:var(--serif);font-weight:500;font-size:23px}
+.lcard .native{font-size:19px;color:var(--ink-soft);margin:0 0 16px;line-height:1.3}
+.tally{display:flex;flex-direction:column;gap:7px;margin:0 0 15px}
+.tally div{display:flex;align-items:baseline;gap:9px;font-size:13.5px}
+.tally b{font-family:var(--mono);font-weight:500;font-size:19px;min-width:1.5ch;
+  text-align:right;font-variant-numeric:tabular-nums}
+.tally span{color:var(--ink-soft)}
+.t-crit b{color:var(--madder)} .t-major b{color:var(--ochre)} .t-minor b{color:var(--ink-soft)}
+.lcard .take{font-size:13.5px;line-height:1.5;color:var(--ink-soft);
+  border-top:1px solid var(--rule-soft);padding-top:13px;margin:0}
+
+/* ---- findings ---- */
+.finding{background:var(--card);border:1px solid var(--rule);
+  border-left:3px solid var(--sev);margin:0 0 16px;padding:22px 24px 20px}
+.finding.crit{--sev:var(--madder)}
+.finding.major{--sev:var(--ochre)}
+.finding.minor{--sev:var(--ink-faint)}
+.fhead{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:0 0 11px}
+.seg{font-family:var(--mono);font-size:11px;letter-spacing:.06em;font-weight:500;
+  background:var(--card-2);border:1px solid var(--rule);padding:3px 7px;color:var(--ink-soft)}
+.sevtag{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--sev);font-weight:500}
+.fclass{font-size:12.5px;color:var(--ink-faint);margin-left:auto}
+.finding h3{font-family:var(--serif);font-weight:500;font-size:22px;line-height:1.28;
+  margin:0 0 16px;letter-spacing:-.008em;text-wrap:balance}
+.src{font-family:var(--serif);font-size:16.5px;line-height:1.5;color:var(--ink);
+  background:var(--card-2);border:1px solid var(--rule-soft);padding:12px 15px;margin:0 0 4px}
+.src .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-faint);display:block;margin:0 0 5px}
+.rows{display:flex;flex-direction:column;gap:0;margin:14px 0 0;
+  border-top:1px solid var(--rule-soft)}
+.row{display:grid;grid-template-columns:96px 1fr;gap:0 16px;
+  padding:13px 0;border-bottom:1px solid var(--rule-soft);align-items:baseline}
+.row .lg{display:flex;align-items:center;gap:7px;font-size:12.5px;
+  color:var(--ink-soft);font-weight:500}
+.dot{width:7px;height:7px;border-radius:50%;flex:none}
+.v-bad .dot{background:var(--madder)}
+.v-warn .dot{background:var(--ochre)}
+.v-ok .dot{background:var(--verdigris)}
+.target{font-size:18.5px;line-height:1.72;margin:0 0 5px;word-break:break-word}
+.mlym{font-family:'Noto Sans Malayalam',var(--sans)}
+.telu{font-family:'Noto Sans Telugu',var(--sans)}
+.deva{font-family:'Noto Sans Devanagari',var(--sans)}
+.gloss{font-family:var(--serif);font-style:italic;font-size:15px;line-height:1.45;
+  color:var(--madder);margin:0}
+.v-ok .gloss{color:var(--verdigris)}
+.v-warn .gloss{color:var(--ochre)}
+.note{font-size:14.5px;line-height:1.6;color:var(--ink-soft);margin:16px 0 0;
+  max-width:76ch}
+.note strong{color:var(--ink);font-weight:600}
+
+/* ---- tables ---- */
+.scroll{overflow-x:auto;border:1px solid var(--rule);background:var(--card)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:600px}
+th,td{text-align:left;padding:11px 15px;border-bottom:1px solid var(--rule-soft);
+  vertical-align:top}
+th{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink-faint);font-weight:500;background:var(--card-2);
+  border-bottom:1px solid var(--rule);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.term{font-family:var(--serif);font-size:17px;font-weight:500;white-space:nowrap}
+td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-soft);
+  white-space:nowrap;font-size:13px}
+.variant{display:block;margin:0 0 7px;line-height:1.5}
+.variant:last-child{margin-bottom:0}
+.variant .wd{font-size:17.5px}
+.variant .gl{font-size:13px;color:var(--ink-soft);font-family:var(--serif);font-style:italic}
+.variant .sg{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.wrong .gl{color:var(--madder)}
+
+/* ---- fix list ---- */
+.fix{border-top:1px solid var(--rule);padding:20px 0 4px;display:grid;
+  grid-template-columns:auto 1fr;gap:0 20px}
+.fix:last-child{border-bottom:1px solid var(--rule);margin-bottom:0}
+.fixno{font-family:var(--mono);font-size:12px;color:var(--madder);font-weight:500;
+  padding-top:4px}
+.fix h3{margin:0 0 7px;font-size:16.5px}
+.fix p{font-size:14.5px;color:var(--ink-soft);max-width:70ch;margin:0 0 .7em}
+.fix p:last-child{margin-bottom:0}
+.fix .where{font-family:var(--mono);font-size:12px;color:var(--ink-faint);
+  display:block;margin:0 0 8px}
+.bar{display:flex;height:5px;margin:20px 0 8px;border:1px solid var(--rule);background:var(--card)}
+.bar i{display:block;height:100%}
+.barkey{display:flex;flex-wrap:wrap;gap:16px;font-size:12.5px;color:var(--ink-soft);
+  font-family:var(--mono);letter-spacing:.02em}
+.barkey span{display:flex;align-items:center;gap:6px}
+footer{border-top:1px solid var(--ink);padding:22px 0 0;font-size:13px;
+  color:var(--ink-faint);font-family:var(--mono);line-height:1.7}
+@media(max-width:620px){
+  .row{grid-template-columns:1fr;gap:6px}
+  .fix{grid-template-columns:1fr;gap:0}
+  .fixno{padding:0 0 4px}
+  .fclass{margin-left:0;flex-basis:100%}
+}
+</style>
+<div class="wrap">
+<header>
+<p class="eyebrow">Translation quality audit &nbsp;·&nbsp; live session 21 Aug 2026</p>
+<h1>The captions are fluent. Several of them say the <em>opposite</em> of the sermon.</h1>
+<p class="standfirst">A 5-minute stretch of a Luke&nbsp;16 sermon, transcribed by distil-large-v3 and translated into Malayalam, Telugu and Hindi by IndicTrans2. Every target sentence reads naturally. Fifteen of them are wrong, and five reverse the preacher&rsquo;s meaning outright.</p>
+<dl class="meta">
+<div><dt>Segments</dt><dd>37</dd></div>
+<div><dt>Sermon body</dt><dd>29</dd></div>
+<div><dt>Duration</dt><dd>5&thinsp;m&thinsp;04&thinsp;s</dd></div>
+<div><dt>Targets</dt><dd>ml · te · hi</dd></div>
+<div><dt>Mean MT latency</dt><dd>1.10&thinsp;s</dd></div>
+<div><dt>Cut mid-sentence</dt><dd>11 of 29</dd></div>
+</dl>
+</header>
+<section><span class="h2-num">The short answer</span><h2>No &mdash; not reliably enough to put in front of a congregation.</h2>
+<div class="verdict">
+<p>Roughly <strong>two thirds of the segments are accurate</strong>, and the fluent ones are genuinely good: idiomatic, correctly inflected, right register. That is also the problem. Nothing on screen signals which third is wrong, and the failures are not garbled text a reader would discount &mdash; they are clean, confident sentences that happen to assert the reverse of what was said.</p>
+<p>The worst of them: the sermon&rsquo;s line that the steward&rsquo;s unethical behaviour is <em>never endorsed</em> reaches all three languages as <strong>&ldquo;it was endorsed&rdquo;</strong>. &ldquo;Jesus praises shrewdness, <em>not dishonesty</em>&rdquo; becomes <strong>&ldquo;Jesus praises cleverness, not honesty&rdquo;</strong> in Malayalam and Telugu. &ldquo;Good intentions without action accomplish nothing&rdquo; becomes an instruction to the congregation: <strong>&ldquo;do not accomplish anything.&rdquo;</strong></p>
+<p>Most of this is not the translation model failing at translation. <strong>It is the segmenter handing the model half a sentence</strong> &mdash; and a verb-final language cannot defer meaning the way English can, so the model guesses, and commits.</p>
+</div></section>
+<section><span class="h2-num">By language</span><h2>Hindi is the most trustworthy; Malayalam is the least.</h2>
+<p class="lede">Counts are findings in this audit where that language is wrong, graded by consequence. &ldquo;Meaning reversed&rdquo; means a listener relying on that caption would take away the opposite of what the preacher said.</p>
+<div class="cards">
+<div class="lcard"><h4>Hindi</h4><p class="native deva">हिन्दी</p><div class="tally">
+<div class="t-crit"><b>3</b><span>meaning reversed</span></div>
+<div class="t-major"><b>6</b><span>substantive</span></div>
+<div class="t-minor"><b>1</b><span>degraded</span></div>
+</div><p class="take">Handles &ldquo;contrast&rdquo;, &ldquo;not dishonesty&rdquo; and &ldquo;just&rdquo; correctly where the others fail. Loses &ldquo;commission&rdquo; twice and invents one negation.</p></div>
+<div class="lcard"><h4>Telugu</h4><p class="native telu">తెలుగు</p><div class="tally">
+<div class="t-crit"><b>4</b><span>meaning reversed</span></div>
+<div class="t-major"><b>4</b><span>substantive</span></div>
+<div class="t-minor"><b>2</b><span>degraded</span></div>
+</div><p class="take">Solid on the fragments the others fumble, but flips who earns the commission and turns the estate owner into a <em>guru</em>.</p></div>
+<div class="lcard"><h4>Malayalam</h4><p class="native mlym">മലയാളം</p><div class="tally">
+<div class="t-crit"><b>5</b><span>meaning reversed</span></div>
+<div class="t-major"><b>4</b><span>substantive</span></div>
+<div class="t-minor"><b>1</b><span>degraded</span></div>
+</div><p class="take">Carries every reversal the other two do, plus two of its own, and is the only language that misplaces reverence &mdash; the divine honorific lands on the dishonest steward.</p></div>
+</div></section>
+<section><span class="h2-num">Root cause</span><h2>A four-second hold, waiting on speech that arrives in eight.</h2>
+<p class="lede"><code>pipeline.py</code> is built on exactly the right insight, stated in its own comment: <em>&ldquo;ml/te/hi are verb-final, so half an English sentence forces the model to invent a verb and then strand the remainder.&rdquo;</em> So it holds any utterance that does not end in <code>.?!…</code> and joins it to the next one. The guard is correct. The timeout is set below the thing it waits for.</p>
+<div class="scroll"><table><thead><tr><th>Measure</th><th>Value</th><th>Consequence</th></tr></thead><tbody>
+<tr><td><code>MAX_SENTENCE_HOLD_S</code></td><td class="n">4.0 s</td><td style="color:var(--ink-soft)">the ceiling on how long a fragment waits</td></tr>
+<tr><td>Median gap to next segment</td><td class="n">7.9 s</td><td style="color:var(--ink-soft)">how long its continuation actually takes to arrive</td></tr>
+<tr><td>Gaps exceeding the timeout</td><td class="n">26 of 28 &nbsp;(93%)</td><td style="color:var(--ink-soft)">the hold expires before the rest of the sentence exists</td></tr>
+<tr><td>Segments force-flushed mid-sentence</td><td class="n">11 of 29 &nbsp;(38%)</td><td style="color:var(--ink-soft)">every one of them translated as a fragment</td></tr>
+<tr><td>Segments <em>starting</em> mid-sentence</td><td class="n">24 of 29 &nbsp;(83%)</td><td style="color:var(--ink-soft)">the orphaned remainder becomes a new sentence</td></tr>
+<tr><td><code>MAX_PENDING_CHARS</code></td><td class="n">220</td><td style="color:var(--ink-soft)">never fires &mdash; longest segment observed is 175 chars</td></tr>
+</tbody></table></div>
+<div class="bar"><i style="flex:11;background:var(--madder)"></i><i style="flex:18;background:var(--verdigris)"></i></div>
+<div class="barkey"><span><i class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--madder);display:block"></i>11 fragments</span><span><i class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--verdigris);display:block"></i>18 complete sentences</span></div>
+<h3>Why a fragment is worse in these three languages than in English</h3>
+<p style="max-width:70ch;color:var(--ink-soft)">English defers its verb; Malayalam, Telugu and Hindi put it last. When the model is handed <em>&ldquo;The man&rsquo;s ability to un-&rdquo;</em> it cannot leave a hole where the predicate goes &mdash; the grammar demands one, so it supplies one. That is why three of the five reversals in this audit are the same mechanism: a negation (<em>never</em>), a subject (<em>good intentions</em>) or a head noun (<em>ability</em>) sat in the previous segment, and the sentence left behind was grammatical, confident and wrong.</p>
+</section>
+<section><span class="h2-num">The ledger &nbsp;·&nbsp; 15 findings</span><h2>Every quotation below is verbatim from the transcript.</h2>
+<p class="lede">Ranked by consequence. The italic line under each target sentence is a back-translation &mdash; what that Malayalam, Telugu or Hindi actually says when read back into English. Segment numbers match the <code>id</code> field in <code>transcripts/2026-08-21.jsonl</code>.</p>
+<article class="finding crit">
+<div class="fhead"><span class="seg">SEG&nbsp;02</span><span class="sevtag">Meaning reversed</span><span class="fclass">“contrast” read as “contrary to”</span></div>
+<h3>the parable's purpose becomes “opposed to moral character”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>Because the purpose of the parable is to contrast moral character.</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">ധാർമ്മിക സ്വഭാവത്തിന് വിരുദ്ധമാണ്</p>
+<p class="gloss">“…is contrary to moral character.”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">నైతిక పాత్రకు విరుద్ధంగా ఉంటుంది</p>
+<p class="gloss">“…is contrary to moral character.”</p>
+</div></div>
+<div class="row v-ok"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">नैतिक चरित्र की तुलना करना है</p>
+<p class="gloss">“…is to compare moral character.” — correct</p>
+</div></div>
+</div>
+<p class="note">A repeat offender: the same <em>contrast → विरुद्ध / విరుద్ధ / വിരുദ്ധ</em> substitution recurs at segment 28 (“Now contrast that with the sons of light”). In a sermon, “the purpose of the parable is contrary to moral character” is a doctrinal claim the speaker never made.</p>
+</article>
+<article class="finding crit">
+<div class="fhead"><span class="seg">SEG&nbsp;16</span><span class="sevtag">Meaning reversed</span><span class="fclass">Negative prefix dropped</span></div>
+<h3>“praises shrewdness, not dishonesty” becomes “praises cleverness, not honesty”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>Jesus praises shrewdness, not dishonesty.</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">യേശു സത്യസന്ധതയെയല്ല, വിവേകത്തെയാണ് പ്രശംസിക്കുന്നത്</p>
+<p class="gloss">“Jesus praises prudence, not honesty.”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">యేసు నిజాయితీని కాకుండా తెలివిని ప్రశంసిస్తాడు</p>
+<p class="gloss">“Jesus praises intelligence rather than honesty.”</p>
+</div></div>
+<div class="row v-ok"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">यीशु चतुराई की प्रशंसा करता है, बेईमानी की नहीं</p>
+<p class="gloss">“Jesus praises shrewdness, not dishonesty.” — correct</p>
+</div></div>
+</div>
+<p class="note"><em>dis</em>honesty lost its prefix in both ml and te, inverting the sentence into a claim that Jesus prefers cleverness over honesty. Hindi got it right, so this is a per-language decode failure, not a source problem.</p>
+</article>
+<article class="finding crit">
+<div class="fhead"><span class="seg">SEG&nbsp;18</span><span class="sevtag">Meaning reversed</span><span class="fclass">Negation lost across a segment split</span></div>
+<h3>“is never endorsed” becomes “it was endorsed”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>…The steward&#x27;s unethical behavior is never…  ▸  …endorsed.</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">അംഗീകരിക്കപ്പെട്ടു</p>
+<p class="gloss">“It was endorsed.”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">ఆమోదించబడింది</p>
+<p class="gloss">“It was approved.”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">समर्थन किया</p>
+<p class="gloss">“Endorsed / supported it.”</p>
+</div></div>
+</div>
+<p class="note">The word <em>never</em> ends segment 17; its verb <em>endorsed</em> opens segment 18. Segment 18 was translated on its own, so the negation is nowhere in it. All three languages state the exact opposite of the preacher: that the steward's unethical behaviour <em>was</em> endorsed.</p>
+</article>
+<article class="finding crit">
+<div class="fhead"><span class="seg">SEG&nbsp;19</span><span class="sevtag">Meaning reversed</span><span class="fclass">Orphaned clause becomes an imperative</span></div>
+<h3>“the man's ability to understand… and act” becomes “Understand! Act immediately!”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>…The man&#x27;s ability to un-  ▸  understand his situation clearly and act immediately.…</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">മനസിലാക്കുകയും ഉടനടി പ്രവർത്തിക്കുകയും ചെയ്യുക</p>
+<p class="gloss">“Understand and act immediately.” — imperative</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">అర్థం చేసుకుని వెంటనే చర్య తీసుకోండి</p>
+<p class="gloss">“Understand and take action at once.” — imperative</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">समझें और तुरंत कार्य करें</p>
+<p class="gloss">“Understand and act immediately.” — imperative</p>
+</div></div>
+</div>
+<p class="note">A noun phrase describing the steward turned into a direct command to the audience in all three languages, because the head noun “ability” was stranded in the previous segment — where Whisper had also cut it mid-word (“to un-”).</p>
+</article>
+<article class="finding crit">
+<div class="fhead"><span class="seg">SEG&nbsp;22</span><span class="sevtag">Meaning reversed</span><span class="fclass">Orphaned verb becomes an imperative</span></div>
+<h3>“accomplish nothing” becomes “do not accomplish anything”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>…Good intentions without action.  ▸  accomplish nothing.…</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">ഒന്നും നേടിയെടുക്കരുത്</p>
+<p class="gloss">“Do not achieve anything.” — prohibitive -അരുത്</p>
+</div></div>
+<div class="row v-ok"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">ఏమీ సాధించలేరు</p>
+<p class="gloss">“Cannot achieve anything.” — correct</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">कुछ भी पूरा न करें</p>
+<p class="gloss">“Do not accomplish anything.” — negative imperative</p>
+</div></div>
+</div>
+<p class="note">The subject (“Good intentions without action”) closed segment 21 and the verb opened segment 22. Standing alone, “accomplish nothing” parses as a command — so ml and hi instruct the congregation to achieve nothing.</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;03</span><span class="sevtag">Substantive</span><span class="fclass">Degenerate decode</span></div>
+<h3>A runaway loop of full stops, ~220 characters long, in all three languages</h3>
+<div class="src"><span class="lbl">English as transcribed</span>…He&#x27;s an example of urgency. He&#x27;s an example of someone who...</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">അവൻ......</p>
+<p class="gloss">214 consecutive “.” characters</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">అతను......</p>
+<p class="gloss">230 consecutive “.” characters</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">वह किसी ऐसे व्यक्ति का एक उदाहरण है जो......</p>
+<p class="gloss">215 consecutive “.” characters</p>
+</div></div>
+</div>
+<p class="note">The trailing ellipsis sent the decoder into a repetition loop that ran to the 256-token cap. This segment took <strong>4.34 s</strong> to translate against a 1.10 s mean — the slowest in the session — so it also stalls the queue. <code>generate()</code> sets no <code>no_repeat_ngram_size</code> or <code>repetition_penalty</code>.</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;08</span><span class="sevtag">Substantive</span><span class="fclass">Domain term lost</span></div>
+<h3>“cut his own commission” becomes “cut his own work”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>Interpretation one, the steward cut his own commission. … The steward reduced his own</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">अपने काम में कटौती की</p>
+<p class="gloss">“cut his own <em>work</em>” — both occurrences</p>
+</div></div>
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">తన సొంత పనిని తగ్గించుకున్నాడు</p>
+<p class="gloss">second occurrence becomes “reduced his own work”</p>
+</div></div>
+<div class="row v-ok"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">സ്വന്തം കമ്മീഷൻ വെട്ടിക്കുറച്ചു</p>
+<p class="gloss">keeps കമ്മീഷൻ — correct</p>
+</div></div>
+</div>
+<p class="note">“Commission” <em>is</em> the interpretation being announced. Hindi listeners are told the steward cut his own work, which carries no meaning here.</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;09</span><span class="sevtag">Substantive</span><span class="fclass">Agent flipped</span></div>
+<h3>“Stewards made their income” becomes “Masters made their income”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>Stewards made their income by increasing the amount owed in contracts.</div>
+<div class="rows">
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">മേൽനോട്ടക്കാർ</p>
+<p class="gloss">“overseers” — acceptable</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">యజమానులు</p>
+<p class="gloss">“masters / owners” — wrong party</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">मालिकों ने</p>
+<p class="gloss">“the owners / masters” — wrong party</p>
+</div></div>
+</div>
+<p class="note">This sentence is the mechanism the whole sermon rests on: the <em>steward</em> padded the contracts to take a cut. Telugu and Hindi attribute it to the master, which makes the next four segments incoherent.</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;12</span><span class="sevtag">Substantive</span><span class="fclass">Referent wrong</span></div>
+<h3>the estate “master” becomes a “guru”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>why the master doesn&#x27;t accuse him of further dishonesty</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">గురువు</p>
+<p class="gloss">“teacher / guru” — te used యజమాని (“master”) correctly in segments 9, 10 and 15</p>
+</div></div>
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">മാസ്റ്റർ</p>
+<p class="gloss">transliterated “master”, where segments 9–15 used യജമാനൻ</p>
+</div></div>
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">मास्टर</p>
+<p class="gloss">transliterated “master”, where segments 9–15 used मालिक</p>
+</div></div>
+</div>
+<p class="note">Also in this segment, all three render “his strategy” reflexively (ml <em>തന്റെ</em>, te <em>తన</em>, hi <em>अपनी</em>), which attaches the strategy to the master rather than the steward.</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;20</span><span class="sevtag">Substantive</span><span class="fclass">Idiom read literally</span></div>
+<h3>“doesn't excuse his failures” becomes “doesn't forgive his failures”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>The steward doesn&#x27;t excuse his failures.</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">തന്റെ പരാജയങ്ങൾക്ക് മാപ്പ് നൽകുന്നില്ല</p>
+<p class="gloss">“does not grant pardon for his failures”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">తన వైఫల్యాలను క్షమించడు</p>
+<p class="gloss">“does not forgive his failures”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">अपनी विफलताओं को माफ नहीं करता है</p>
+<p class="gloss">“does not forgive his failures”</p>
+</div></div>
+</div>
+<p class="note">All three took <em>excuse</em> as “pardon” rather than “make excuses for”, reversing the praise into a comment about his lack of mercy. Same class of failure at segment 25, where “Let me break that down” became ml <em>ഞാൻ അത് തകർക്കട്ടെ</em> (“let me smash it”) and te <em>నేను దానిని విచ్ఛిన్నం చేస్తాను</em> (“I will shatter it”).</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;23</span><span class="sevtag">Substantive</span><span class="fclass">Scope word dropped</span></div>
+<h3>“You can't just have good morals” becomes “You cannot have good morals”</h3>
+<div class="src"><span class="lbl">English as transcribed</span>You can&#x27;t just have good morals.</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">നിങ്ങൾക്ക് നല്ല ധാർമ്മികത ഉണ്ടായിരിക്കാൻ കഴിയില്ല</p>
+<p class="gloss">“You cannot have good morals.” — “just” is gone</p>
+</div></div>
+<div class="row v-ok"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">మీరు కేవలం మంచి నైతికతను కలిగి ఉండలేరు</p>
+<p class="gloss">keeps కేవలం (“only”) — correct</p>
+</div></div>
+<div class="row v-ok"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">आपके पास केवल अच्छी नैतिकता नहीं हो सकती</p>
+<p class="gloss">keeps केवल (“only”) — correct</p>
+</div></div>
+</div>
+<p class="note">Dropping <em>just</em> turns a claim about sufficiency into a flat denial that good morals are possible.</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;28</span><span class="sevtag">Substantive</span><span class="fclass">Predicate fabricated</span></div>
+<h3>A dangling fragment is completed into a theological claim</h3>
+<div class="src"><span class="lbl">English as transcribed</span>…Those who believe in God in eternal life, spirit</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">ദൈവത്തിൽ വിശ്വസിക്കുന്നവർ ആത്മാവാണ്</p>
+<p class="gloss">“Those who believe in God <em>are spirit</em>.”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">जो अनन्त जीवन में भगवान में विश्वास करते हैं, वे आत्मा हैं</p>
+<p class="gloss">“…they <em>are spirit</em>.”</p>
+</div></div>
+<div class="row v-ok"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">ఆత్మ.</p>
+<p class="gloss">leaves it as the bare fragment “spirit.”</p>
+</div></div>
+</div>
+<p class="note">ml and hi invented a copula, turning a cut-off list into an assertion about believers that nobody made. Hindi also renders God as <em>भगवान</em> here — the generic/Hindu-register word, where the BSI Hindi edition named in <code>config.py</code> uses <em>परमेश्वर</em>.</p>
+</article>
+<article class="finding major">
+<div class="fhead"><span class="seg">SEG&nbsp;29</span><span class="sevtag">Substantive</span><span class="fclass">Negation invented</span></div>
+<h3>Hindi inserts a “not” that reverses the comparison</h3>
+<div class="src"><span class="lbl">English as transcribed</span>Believers often show less urgency about their spiritual future than with worldly people show about their birth.</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">जबकि सांसारिक लोग अपने जन्म के बारे में नहीं बताते हैं</p>
+<p class="gloss">“…while worldly people do <em>not</em> speak about their birth.”</p>
+</div></div>
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">ലൌകിക ആളുകൾ അവരുടെ ജനനത്തെക്കുറിച്ച് കാണിക്കുന്നതിനേക്കാൾ</p>
+<p class="gloss">keeps the comparison intact</p>
+</div></div>
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">ప్రాపంచిక ప్రజలు తమ జననం గురించి చూపించే దానికంటే</p>
+<p class="gloss">keeps the comparison intact</p>
+</div></div>
+</div>
+<p class="note">Hindi added a negation absent from the source and swapped “show” for “tell”, destroying the comparison that is the punchline of the section. (The source itself is damaged — Whisper heard “their birth” for what was almost certainly “their business”.)</p>
+</article>
+<article class="finding minor">
+<div class="fhead"><span class="seg">SEG&nbsp;21</span><span class="sevtag">Degraded</span><span class="fclass">Referent wrong</span></div>
+<h3>“Jesus highlights his quality” points back at Jesus</h3>
+<div class="src"><span class="lbl">English as transcribed</span>Jesus highlights his quality because it&#x27;s essential for spiritual wisdom.</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">യേശു തൻറെ ഗുണത്തെ ഉയർത്തിക്കാട്ടുന്നു</p>
+<p class="gloss">“Jesus highlights <em>his own</em> quality”</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">యేసు తన నాణ్యతను హైలైట్ చేస్తాడు</p>
+<p class="gloss">“…his own <em>product quality</em>” — నాణ్యత is the manufacturing sense</p>
+</div></div>
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">यीशु अपने गुण पर प्रकाश डालता है</p>
+<p class="gloss">“Jesus highlights <em>his own</em> virtue”</p>
+</div></div>
+</div>
+<p class="note">The English is genuinely ambiguous, but all three picked the wrong antecedent — the trait belongs to the steward.</p>
+</article>
+<article class="finding minor">
+<div class="fhead"><span class="seg">SEG&nbsp;24</span><span class="sevtag">Degraded</span><span class="fclass">Comparative fabricated</span></div>
+<h3>Telugu invents “greater” to close a truncated comparison</h3>
+<div class="src"><span class="lbl">English as transcribed</span>He says the sons of this world are more</div>
+<div class="rows">
+<div class="row v-bad"><div class="lg"><i class="dot"></i>Telugu</div><div>
+<p class="target telu">ఈ లోక కుమారులు మరింత గొప్పవారని</p>
+<p class="gloss">“…are more <em>great</em>.” — “greater” is not in the source</p>
+</div></div>
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Malayalam</div><div>
+<p class="target mlym">ഈ ലോകപുത്രന്മാർ കൂടുതലാണെന്ന്</p>
+<p class="gloss">leaves it dangling: “are more”</p>
+</div></div>
+<div class="row v-warn"><div class="lg"><i class="dot"></i>Hindi</div><div>
+<p class="target deva">इस दुनिया के पुत्र अधिक हैं</p>
+<p class="gloss">leaves it dangling: “are more”</p>
+</div></div>
+</div>
+<p class="note">The real predicate — “more shrewd” — arrives in segment 25.</p>
+</article>
+</section>
+<section><span class="h2-num">Terminology</span><h2>One character, four Malayalam names.</h2>
+<p class="lede">Each segment is translated independently, so nothing carries a chosen term forward. The central figure of the parable is renamed repeatedly inside a single sermon &mdash; a listener has no way to tell it is still the same man.</p>
+<div class="scroll"><table><thead><tr><th>Source term</th><th>Language</th><th>Rendered as</th></tr></thead><tbody>
+<tr>
+<td class="term" rowspan="3">steward</td>
+<td class="n">Malayalam</td><td>
+<span class="variant"><span class="wd mlym">കാവൽക്കാരൻ</span> <span class="gl">watchman</span> <span class="sg">&nbsp;seg 3, 10, 15, 17, 20, 27</span></span>
+<span class="variant"><span class="wd mlym">സ്റ്റീവർഡ്</span> <span class="gl">transliterated</span> <span class="sg">&nbsp;seg 8</span></span>
+<span class="variant"><span class="wd mlym">മേൽനോട്ടക്കാർ</span> <span class="gl">overseers</span> <span class="sg">&nbsp;seg 9</span></span>
+<span class="variant"><span class="wd mlym">സൂക്ഷിപ്പുകാരൻ</span> <span class="gl">custodian</span> <span class="sg">&nbsp;seg 13</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Telugu</td><td>
+<span class="variant"><span class="wd telu">పరిచారకుడు</span> <span class="gl">attendant</span> <span class="sg">&nbsp;seg 3</span></span>
+<span class="variant"><span class="wd telu">స్టీవర్డ్</span> <span class="gl">transliterated</span> <span class="sg">&nbsp;seg 8, 10, 13, 15, 17, 20, 27</span></span>
+<span class="variant wrong"><span class="wd telu">యజమానులు</span> <span class="gl">masters — wrong</span> <span class="sg">&nbsp;seg 9</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Hindi</td><td>
+<span class="variant"><span class="wd deva">प्रबंधक</span> <span class="gl">manager</span> <span class="sg">&nbsp;seg 3, 15, 20</span></span>
+<span class="variant"><span class="wd deva">कारभारी</span> <span class="gl">steward</span> <span class="sg">&nbsp;seg 8, 10, 13, 17, 27</span></span>
+<span class="variant wrong"><span class="wd deva">मालिकों</span> <span class="gl">owners — wrong</span> <span class="sg">&nbsp;seg 9</span></span>
+</td></tr>
+<tr>
+<td class="term" rowspan="3">master</td>
+<td class="n">Malayalam</td><td>
+<span class="variant"><span class="wd mlym">യജമാനൻ</span> <span class="gl">master</span> <span class="sg">&nbsp;seg 9, 10, 15</span></span>
+<span class="variant"><span class="wd mlym">മാസ്റ്റർ</span> <span class="gl">transliterated</span> <span class="sg">&nbsp;seg 12</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Telugu</td><td>
+<span class="variant"><span class="wd telu">యజమాని</span> <span class="gl">master</span> <span class="sg">&nbsp;seg 9, 10, 15</span></span>
+<span class="variant wrong"><span class="wd telu">గురువు</span> <span class="gl">guru — wrong</span> <span class="sg">&nbsp;seg 12</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Hindi</td><td>
+<span class="variant"><span class="wd deva">मालिक</span> <span class="gl">owner</span> <span class="sg">&nbsp;seg 9, 10, 15</span></span>
+<span class="variant"><span class="wd deva">मास्टर</span> <span class="gl">transliterated</span> <span class="sg">&nbsp;seg 12</span></span>
+</td></tr>
+<tr>
+<td class="term" rowspan="3">sons of light  (Luke 16:8)</td>
+<td class="n">Malayalam</td><td>
+<span class="variant"><span class="wd mlym">ജീവപുത്രന്മാരേക്കാൾ</span> <span class="gl">“than the sons of life”</span> <span class="sg">&nbsp;seg 25</span></span>
+<span class="variant"><span class="wd mlym">പ്രകാശപുത്രന്മാരുമായി</span> <span class="gl">“with the sons of light”</span> <span class="sg">&nbsp;seg 28</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Telugu</td><td>
+<span class="variant"><span class="wd telu">జీవిత కుమారుల</span> <span class="gl">“sons of life”</span> <span class="sg">&nbsp;seg 25</span></span>
+<span class="variant"><span class="wd telu">కాంతి కుమారులు</span> <span class="gl">“sons of light”</span> <span class="sg">&nbsp;seg 28</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Hindi</td><td>
+<span class="variant"><span class="wd deva">जीवन के पुत्रों</span> <span class="gl">“sons of life”</span> <span class="sg">&nbsp;seg 25</span></span>
+<span class="variant"><span class="wd deva">प्रकाश के पुत्रों</span> <span class="gl">“sons of light”</span> <span class="sg">&nbsp;seg 28</span></span>
+</td></tr>
+<tr>
+<td class="term" rowspan="3">commission</td>
+<td class="n">Malayalam</td><td>
+<span class="variant"><span class="wd mlym">കമ്മീഷൻ</span> <span class="gl">commission</span> <span class="sg">&nbsp;seg 8, 14</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Telugu</td><td>
+<span class="variant"><span class="wd telu">కమిషన్</span> <span class="gl">commission</span> <span class="sg">&nbsp;seg 8, 14</span></span>
+<span class="variant wrong"><span class="wd telu">పని</span> <span class="gl">“work” — wrong</span> <span class="sg">&nbsp;seg 8</span></span>
+</td></tr>
+<tr>
+
+<td class="n">Hindi</td><td>
+<span class="variant"><span class="wd deva">कमीशन</span> <span class="gl">commission</span> <span class="sg">&nbsp;seg 14</span></span>
+<span class="variant wrong"><span class="wd deva">काम</span> <span class="gl">“work” — wrong</span> <span class="sg">&nbsp;seg 8</span></span>
+</td></tr>
+</tbody></table></div>
+<p class="note" style="max-width:74ch">Note the third row: <em>sons of light</em> is Luke 16:8, a fixed phrase in all four reference editions named in <code>config.py</code>. It appears twice in this session as two different things, because Whisper heard &ldquo;sons of <em>life</em>&rdquo; the first time and the translator faithfully carried the error through.</p>
+</section>
+<section><span class="h2-num">Register</span><h2>The reverence is inverted.</h2>
+<p class="lede">Malayalam distinguishes three levels of third-person reference, and this session uses all three for the same man &mdash; including the form reserved for God.</p>
+<div class="scroll"><table><thead><tr><th>Segment</th><th>Refers to</th><th>Form used</th><th>Register</th></tr></thead><tbody>
+<tr><td class="n">seg 1</td><td>the dishonest steward</td><td class="mlym" style="font-size:18px">അവിടുത്തെ</td><td style="color:var(--madder)">divine honorific &mdash; reserved for God</td></tr>
+<tr><td class="n">seg 5</td><td>Jesus</td><td class="mlym" style="font-size:18px">അവൻ</td><td style="color:var(--madder)">plain masculine pronoun</td></tr>
+<tr><td class="n">seg 14</td><td>the steward</td><td class="mlym" style="font-size:18px">അദ്ദേഹം</td><td>respectful</td></tr>
+<tr><td class="n">seg 15</td><td>the steward</td><td class="mlym" style="font-size:18px">അവന്റെ</td><td>plain</td></tr>
+<tr><td class="n">seg 19</td><td>the steward</td><td class="mlym" style="font-size:18px">അദ്ദേഹത്തിൻറെ</td><td>respectful</td></tr>
+<tr><td class="n">seg 20</td><td>the steward</td><td class="mlym" style="font-size:18px">അവൻ</td><td>plain</td></tr>
+</tbody></table></div>
+<p class="note" style="max-width:74ch">Segments&nbsp;1 and&nbsp;5 are the pair that matters: the swindler in the parable receives the honorific Malayalam Christian usage reserves for the divine, while Jesus receives the plain pronoun. Across the session the steward alternates between respectful <em>അദ്ദേഹം</em> (6 segments) and plain <em>അവൻ</em> (6 segments) with no pattern. Hindi has a milder version of the same drift: Jesus takes plain singular <em>करता है</em> in seven segments and honorific plural <em>करते हैं / चाहते हैं</em> in three.</p>
+<h3>Two smaller register slips worth a look</h3>
+<p style="max-width:70ch;color:var(--ink-soft)">Segment&nbsp;28 renders God as Hindi <em class="deva">भगवान</em>, the generic term, where the BSI Hindi edition named in <code>config.py</code> uses <em class="deva">परमेश्वर</em>. And the Malayalam output mixes three encodings of the same <em>ṉṟa</em> conjunct &mdash; legacy <em class="mlym">ൻറ</em> (11&nbsp;times), <em class="mlym">ൻ്റ</em> (2) and standard <em class="mlym">ന്റ</em> (3) &mdash; plus 4 uses of the deprecated <em class="mlym">ൌ</em> vowel sign. All four render inconsistently across phones.</p>
+</section>
+<section><span class="h2-num">After the audio stopped</span><h2>Eight segments of nothing, translated and broadcast.</h2>
+<p class="lede">The sermon ends at 00:54:55. The pipeline kept producing captions for another 74 seconds from silence &mdash; and translated each one.</p>
+<div class="scroll"><table><thead><tr><th>Time</th><th>English</th><th>Malayalam</th><th>Telugu</th><th>Hindi</th></tr></thead><tbody>
+<tr><td class="n">00:55:14</td><td>Ugh.</td><td class="mlym">ഉഹ്.</td><td class="telu">ఉహ్.</td><td class="deva">उह।</td></tr>
+<tr><td class="n">00:55:22</td><td>Yeah.</td><td class="mlym">അതെ.</td><td class="telu">అవును.</td><td class="deva">हाँ।</td></tr>
+<tr><td class="n">00:55:31</td><td>Ugh.</td><td class="mlym">ഉഹ്.</td><td class="telu">ఉహ్.</td><td class="deva">उह।</td></tr>
+<tr><td class="n">00:55:39</td><td>Mm.</td><td class="mlym">എം. എം.</td><td class="telu">ఎం. ఎం.</td><td class="deva">एम. एम.</td></tr>
+<tr><td class="n">00:55:44</td><td>Thank you.</td><td class="mlym">നന്ദി.</td><td class="telu">ధన్యవాదాలు.</td><td class="deva">धन्यवाद।</td></tr>
+<tr><td class="n">00:55:53</td><td>Oh. Good.</td><td class="mlym">ഓ. കൊള്ളാം.</td><td class="telu">ఓహ్. బాగుంది.</td><td class="deva">ओह. अच्छा।</td></tr>
+<tr><td class="n">00:56:01</td><td>Thank you.</td><td class="mlym">നന്ദി.</td><td class="telu">ధన్యవాదాలు.</td><td class="deva">धन्यवाद।</td></tr>
+<tr><td class="n">00:56:09</td><td>Thank you.</td><td class="mlym">നന്ദി.</td><td class="telu">ధన్యవాదాలు.</td><td class="deva">धन्यवाद।</td></tr>
+</tbody></table></div>
+<p class="note" style="max-width:74ch"><code>config.py</code> deliberately keeps bare &ldquo;Thank you.&rdquo; out of <code>HALLUCINATION_PHRASES</code>, on the sound reasoning that a preacher genuinely says it, and delegates the job to the energy gate and <code>NO_SPEECH_PROB_MAX</code>. Those two gates are leaking: three &ldquo;Thank you.&rdquo;, two &ldquo;Ugh.&rdquo;, one each of &ldquo;Yeah.&rdquo;, &ldquo;Mm.&rdquo; and &ldquo;Oh. Good.&rdquo; got through in 74&nbsp;seconds of room noise.</p>
+</section>
+<section><span class="h2-num">What to change</span><h2>Ordered by how much of the damage each one removes.</h2>
+<p class="lede">The first two are small, contained edits and together they account for most of what is on this page.</p>
+<div class="fix"><span class="fixno">01</span><div>
+<h3>Raise the sentence-hold timeout above the chunk cadence</h3><span class="where">pipeline.py · MAX_SENTENCE_HOLD_S in config.py</span>
+<p>At 4.0&nbsp;s the hold expires before its continuation arrives 93% of the time, so the guard that exists specifically to prevent fragment translation almost never fires. The observed median gap is 7.9&nbsp;s and <code>MAX_BUFFER_S</code> is 8.0. Set the hold to <strong>10&ndash;12&nbsp;s</strong> so it spans at least one full audio chunk. This alone addresses segments 18, 19, 22, 23 and 24 &mdash; three of the five reversals.</p>
+<p>English captions already publish immediately and independently, so raising this delays only the translated line, and only for sentences that are genuinely still in progress.</p>
+</div></div>
+<div class="fix"><span class="fixno">02</span><div>
+<h3>Add repetition control to the decode call</h3><span class="where">translator.py · IndicTrans2Translator.translate_all_sync</span>
+<p><code>generate()</code> currently passes <code>max_length</code> and <code>num_beams</code> and nothing else. Segment&nbsp;3 ran to the full 256-token cap emitting a single repeated character in all three languages, taking 4.34&nbsp;s against a 1.10&nbsp;s mean. Add <code>no_repeat_ngram_size=4</code> and <code>repetition_penalty=1.15</code>.</p>
+<p>This also caps the worst-case latency, which matters because the GPU lock serialises the queue behind whichever segment is slowest.</p>
+</div></div>
+<div class="fix"><span class="fixno">03</span><div>
+<h3>Strip trailing ellipses before the text reaches the translator</h3><span class="where">pipeline.py · _flush</span>
+<p>The runaway in segment&nbsp;3 was seeded by a trailing <code>...</code>. A dangling ellipsis carries no meaning into the target and reliably invites the loop &mdash; drop it, along with trailing commas, on the way into <code>translate_all</code>.</p>
+</div></div>
+<div class="fix"><span class="fixno">04</span><div>
+<h3>Give the translator the previous sentence as context</h3><span class="where">translator.py</span>
+<p>Terminology drift, the honorific inversion and the wrong-antecedent errors all come from the same place: each segment is translated with no memory of the one before it. Prepending the previous flushed sentence and discarding its translation costs one longer forward pass and gives the model something to be consistent with.</p>
+<p>If that proves too slow for three targets, the cheaper approximation is a pinned glossary for the terms that actually recur &mdash; <em>steward</em>, <em>master</em>, <em>commission</em>, <em>sons of light</em> &mdash; applied as a post-pass.</p>
+</div></div>
+<div class="fix"><span class="fixno">05</span><div>
+<h3>Tighten the silence gates, or gate on the English side</h3><span class="where">stt.py · keep_segment · config.py</span>
+<p>Eight phantom segments in 74&nbsp;seconds. Rather than extending the blocklist, which <code>config.py</code> rightly resists, consider dropping any segment under ~3 words that arrives with no speech in the preceding window &mdash; that catches &ldquo;Ugh.&rdquo;, &ldquo;Mm.&rdquo; and &ldquo;Yeah.&rdquo; without touching a real &ldquo;Amen.&rdquo;</p>
+</div></div>
+<div class="fix"><span class="fixno">06</span><div>
+<h3>Normalise the Malayalam output encoding</h3><span class="where">a post-pass on the ml string</span>
+<p>Map legacy <em class="mlym">ൻറ</em> and <em class="mlym">ൻ്റ</em> to standard <em class="mlym">ന്റ</em>, and the deprecated <em class="mlym">ൌ</em> to <em class="mlym">ൗ</em>, before the text reaches the screens.</p>
+</div></div>
+</section>
+<footer>
+Source: transcripts/2026-08-21.jsonl &nbsp;·&nbsp; 37 segments, 00:51:05&ndash;00:56:09<br>
+distil-large-v3 (STT) &nbsp;·&nbsp; ai4bharat/indictrans2-en-indic-dist-200M, 5 beams (MT)<br>
+All 72 quoted target-language spans checked verbatim against the transcript.
+</footer>
+</div>

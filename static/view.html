@@ -2,24 +2,70 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Live Translation — My Language</title>
   <link rel="stylesheet" href="/static/common.css">
   <style>
-    main { font-size: 1.5rem; }
-    #picker { display: flex; gap: 0.5rem; padding: 0.8rem 1.2rem; flex-wrap: wrap; }
+    :root { --caption-size: 1.5rem; }
+
+    /* Header: connection state on the left, text size on the right. */
+    #size-controls { display: flex; gap: 0.4rem; align-items: center; }
+    #size-controls button {
+      width: 2.2rem; height: 2.2rem; line-height: 1; border-radius: 0.5rem;
+      background: #16202b; color: #e8eef5; border: 1px solid #2b3948;
+      cursor: pointer; font-size: 0.95rem;
+    }
+    #size-controls button:disabled { opacity: 0.35; cursor: default; }
+
+    /* Fixed four-column grid rather than flex-wrap: on a narrow phone the
+       fourth language wrapped onto a second row and ate caption space. */
+    #picker { display: grid; grid-template-columns: repeat(4, 1fr);
+              gap: 0.5rem; padding: 0.8rem 1rem; }
     #picker button {
-      flex: 1; min-width: 5.5rem; padding: 0.7rem 0.4rem; font-size: 1rem;
+      padding: 0.7rem 0.2rem; font-size: 0.95rem; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       background: #16202b; color: #e8eef5; border: 1px solid #2b3948;
       border-radius: 0.5rem; cursor: pointer;
     }
     #picker button.active { background: #1d4ed8; border-color: #3b82f6; }
+
+    /* One flowing paragraph — sentences are inline spans, so the message reads
+       continuously instead of as a stack of separate blocks. */
+    #transcript {
+      font-size: var(--caption-size);
+      line-height: 1.75;
+      hyphens: auto;
+      overflow-wrap: break-word;
+    }
+    #transcript:empty { display: none; }
+    #transcript span { transition: color 120ms ease-out; }
+
+    /* Not yet translated: the English shows through in grey and is swapped for
+       the translation when it lands, so the page never looks stalled. */
+    #transcript span.awaiting { color: #6b7c8f; }
+    /* :not(.awaiting) matters — the newest sentence is almost always the one
+       still awaiting translation, so an unqualified .live rule would cancel
+       the dimming exactly when it is needed. */
+    #transcript span.live:not(.awaiting) { color: #ffffff; }
+
+    #jump-live {
+      position: fixed; left: 50%; transform: translateX(-50%);
+      bottom: calc(1.1rem + env(safe-area-inset-bottom));
+      padding: 0.6rem 1.1rem; border-radius: 999px;
+      background: #1d4ed8; color: #fff; border: 1px solid #3b82f6;
+      font-size: 0.95rem; cursor: pointer; z-index: 10;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    }
+    #jump-live[hidden] { display: none; }
   </style>
 </head>
 <body>
   <header>
     <span><span id="status-dot"></span><span id="status-text">connecting…</span></span>
-    <span>Live Translation</span>
+    <span id="size-controls">
+      <button id="text-smaller" type="button" aria-label="Smaller text">A−</button>
+      <button id="text-bigger" type="button" aria-label="Larger text">A+</button>
+    </span>
   </header>
   <nav id="picker">
     <button data-lang="en">English</button>
@@ -29,7 +75,9 @@
   </nav>
   <main id="captions">
     <div class="empty-state" id="empty">Waiting for the speaker…</div>
+    <p id="transcript"></p>
   </main>
+  <button id="jump-live" type="button" hidden>↓ Live</button>
   <script src="/static/view.js"></script>
 </body>
 </html>

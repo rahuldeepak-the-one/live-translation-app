@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>caption page harness</title>
+<style>body { margin: 0; background: #000; }</style></head>
+<body>
+  <pre id="__results" hidden></pre>
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    import(`/tests/ui/${params.get("suite") || "view"}_tests.js`);
+  </script>
+</body>
+</html>

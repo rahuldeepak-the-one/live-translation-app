@@ -64,22 +64,32 @@ class _FakeTokenizer:
 
 
 class _FakeModel:
-    def __init__(self):
+    """decoded may be one list (reused) or a list of lists (one per call)."""
+
+    def __init__(self, decoded=None):
         self.generate_calls = 0
+        self.generate_kwargs = None
+        d = DECODED if decoded is None else decoded
+        self.per_call = d if d and isinstance(d[0], list) else None
+        self.decoded = None if self.per_call else list(d)
 
     def generate(self, **kwargs):
+        self.generate_kwargs = kwargs
+        i = self.generate_calls
         self.generate_calls += 1
-        return list(DECODED)
+        if self.per_call is not None:
+            return list(self.per_call[min(i, len(self.per_call) - 1)])
+        return list(self.decoded)
 
 
-def _translator_with_fake_model():
+def _translator_with_fake_model(decoded=None):
     """An IndicTrans2Translator with real processors but no model weights."""
     import translator as T
 
     t = object.__new__(T.IndicTrans2Translator)
     t.device = "cpu"
     t.tokenizer = _FakeTokenizer()
-    t.model = _FakeModel()
+    t.model = _FakeModel(decoded)
     t.processors = T._make_processors()
     return t
 
@@ -144,3 +154,331 @@ async def test_empty_text_short_circuits_without_model():
 
     assert await t.translate_all("   ") == {"ml": "", "te": "", "hi": ""}
     assert t.model.generate_calls == 0
+
+
+# --- Repetition control -----------------------------------------------------
+
+def test_generate_guards_against_repetition_loops():
+    """Beam search alone will happily emit one token to the length cap.
+
+    Segment 3 of the 2026-08-21 session ("...an example of someone who...")
+    produced 214-230 consecutive full stops in Malayalam, Telugu and Hindi and
+    took 4.34s against a 1.10s mean. Because the GPU lock serialises the queue,
+    the slowest segment also stalls every segment behind it.
+    """
+    t = _translator_with_fake_model()
+    _run_with_timeout(lambda: t.translate_all_sync("an example of someone who"))
+
+    kwargs = t.model.generate_kwargs
+    assert kwargs["no_repeat_ngram_size"] >= 3, (
+        "no n-gram repetition block: a degenerate decode runs to max_length"
+    )
+    assert kwargs["repetition_penalty"] > 1.0, "no repetition penalty"
+
+
+# --- Malayalam output encoding ---------------------------------------------
+
+def test_legacy_chillu_conjunct_is_normalized():
+    """IndicTrans2 emits three different encodings of the same nṟa conjunct.
+
+    The 2026-08-21 session contained legacy U+0D7B U+0D31 (11 times),
+    U+0D7B U+0D4D U+0D31 (2) and standard U+0D28 U+0D4D U+0D31 (3). The first
+    two render inconsistently across phones and Android WebView.
+    """
+    from translator import normalize_malayalam
+    assert normalize_malayalam("തൻറെ") == \
+        "തന്റെ"          # തൻറെ -> തന്റെ
+    assert normalize_malayalam("ൻ്റെ") == \
+        "ന്റെ"                # ൻ്റെ  -> ന്റെ
+
+
+def test_deprecated_au_vowel_sign_is_normalized():
+    """U+0D4C is deprecated in favour of U+0D57; 4 uses in one session."""
+    from translator import normalize_malayalam
+    assert normalize_malayalam("ഭൌമ") == "ഭൗമ"
+
+
+def test_normalization_leaves_correct_malayalam_untouched():
+    from translator import normalize_malayalam
+    good = "തന്റെ"       # തന്റെ, already standard
+    assert normalize_malayalam(good) == good
+    assert normalize_malayalam("ജ്ഞാനം") == \
+        "ജ്ഞാനം"    # ജ്ഞാനം
+
+
+def test_malayalam_output_is_normalized_end_to_end():
+    """The normaliser has to actually be wired into translate_all_sync.
+
+    The fake decode deliberately carries all three artefacts through
+    postprocess_batch, which leaves them untouched — so this test fails if
+    normalize_malayalam() is written but never called.
+    """
+    dirty = "\u0d24\u0d7b\u0d31\u0d46 \u0d17\u0d41\u0d23\u0d02, \u0d2d\u0d4c\u0d2e\u0d3f\u0d15\u0d02"
+    t = _translator_with_fake_model([dirty] + DECODED[1:])
+    out = _run_with_timeout(lambda: t.translate_all_sync("his own quality, earthly"))
+
+    assert "\u0d7b\u0d31" not in out["ml"], f"legacy chillu+rra survived: {out['ml']!r}"
+    assert "\u0d7b\u0d4d\u0d31" not in out["ml"], f"chillu+virama+rra survived: {out['ml']!r}"
+    assert "\u0d4c" not in out["ml"], f"deprecated au sign survived: {out['ml']!r}"
+    # ...and the text is otherwise preserved, not blanked
+    assert "\u0d28\u0d4d\u0d31" in out["ml"], f"conjunct lost entirely: {out['ml']!r}"
+
+
+# --- NLLB fallback ----------------------------------------------------------
+
+class _FakeNLLBTokenizer:
+    """NLLB drives the tokenizer differently: src_lang attribute, one call per
+    language, and a forced BOS token id looked up by name."""
+
+    def __init__(self):
+        self.src_lang = None
+        self.calls = 0
+
+    def __call__(self, text, **kwargs):
+        self.calls += 1
+        return _FakeEncoding(input_ids=[[1, 2]])
+
+    def convert_tokens_to_ids(self, token):
+        return 7
+
+    def batch_decode(self, out, **kwargs):
+        return list(out)
+
+
+def _nllb_with_fake_model(decoded):
+    import translator as T
+
+    t = object.__new__(T.NLLBTranslator)
+    t.device = "cpu"
+    t.tokenizer = _FakeNLLBTokenizer()
+    t.model = _FakeModel(decoded)
+    return t
+
+
+def test_nllb_fallback_also_guards_against_repetition_loops():
+    """The fallback carries the same failure mode, so it needs the same guards."""
+    t = _nllb_with_fake_model(["ഒന്ന്"] * 3)
+    t.translate_all_sync("God is love.")
+
+    kwargs = t.model.generate_kwargs
+    assert kwargs["no_repeat_ngram_size"] >= 3
+    assert kwargs["repetition_penalty"] > 1.0
+
+
+def test_nllb_fallback_normalizes_malayalam_output():
+    dirty = "തൻറെ"      # തൻറെ, legacy encoding
+    t = _nllb_with_fake_model([dirty] * 3)
+
+    out = t.translate_all_sync("his own")
+
+    assert out["ml"] == "തന്റെ", f"got {out['ml']!r}"
+
+
+# --- Glossary ---------------------------------------------------------------
+# Terminology drift is the audit's cosmetic-but-confusing finding: "steward"
+# appeared as four different Malayalam words in one sermon. Context makes drift
+# less likely; only a glossary pins a term. Substitution is at STEM level so
+# case suffixes survive -- Malayalam agentive nouns inflect on the stem.
+
+def test_glossary_replaces_a_stem_and_keeps_the_suffix(monkeypatch):
+    import translator as T
+    # Illustrative only: real terms are a native-speaker decision, so
+    # config.GLOSSARY ships empty.
+    monkeypatch.setattr(T, "GLOSSARY", {"ml": {"കാവൽക്കാര": "കാര്യസ്ഥ"}})
+    # nominative -ൻ, genitive -ന്റെ and plural -ർ all ride along
+    assert T.apply_glossary("ml", "കാവൽക്കാരൻ") == "കാര്യസ്ഥൻ"
+    assert T.apply_glossary("ml", "കാവൽക്കാരന്റെ") == "കാര്യസ്ഥന്റെ"
+    assert T.apply_glossary("ml", "കാവൽക്കാരർ") == "കാര്യസ്ഥർ"
+
+
+def test_glossary_leaves_other_languages_alone(monkeypatch):
+    import translator as T
+    monkeypatch.setattr(T, "GLOSSARY", {"ml": {"കാവൽക്കാര": "കാര്യസ്ഥ"}})
+    assert T.apply_glossary("te", "కావൽക്കാര") == "కావൽക്കാര"
+
+
+def test_glossary_prefers_the_longest_match(monkeypatch):
+    """A short stem must not eat a longer one it is a prefix of."""
+    import translator as T
+    monkeypatch.setattr(T, "GLOSSARY", {"hi": {"मालिक": "स्वामी",
+                                               "मालिकाना": "स्वामित्व"}})
+    assert T.apply_glossary("hi", "मालिकाना हक") == "स्वामित्व हक"
+
+
+def test_empty_glossary_is_a_noop():
+    from translator import apply_glossary
+    assert apply_glossary("ml", "കാവൽക്കാരൻ") == "കാവൽക്കാരൻ"
+
+
+def test_shipped_glossary_is_empty():
+    """Guessing terms risks making it worse; the church fills this in."""
+    from config import GLOSSARY
+    assert all(not terms for terms in GLOSSARY.values()), (
+        "GLOSSARY has entries — make sure a native speaker chose them"
+    )
+
+
+# --- Sentence helpers for context recovery ---------------------------------
+
+def test_last_sentence_of_the_context():
+    from translator import last_sentence
+    assert last_sentence("Not the master's wealth. Remember the system.") == \
+        "Remember the system."
+    assert last_sentence("Only one sentence.") == "Only one sentence."
+    assert last_sentence("") == ""
+
+
+def test_target_sentences_split_on_the_hindi_danda():
+    """IndicTrans2 ends Hindi sentences with U+0964, not a full stop.
+
+    Splitting only on "." would treat a whole Hindi paragraph as one sentence
+    and the context-recovery step would return nothing.
+    """
+    from translator import split_target_sentences
+    assert split_target_sentences("पहला वाक्य। दूसरा वाक्य।") == \
+        ["पहला वाक्य।", "दूसरा वाक्य।"]
+    assert split_target_sentences("ഒന്ന്. രണ്ട്.") == ["ഒന്ന്.", "രണ്ട്."]
+    assert split_target_sentences("") == []
+
+
+@pytest.fixture
+def context_on(monkeypatch):
+    """These tests exercise the context mechanism, which ships disabled."""
+    import translator as T
+    monkeypatch.setattr(T, "MT_USE_CONTEXT", True)
+
+
+# --- Source-side context, with a content-integrity guard --------------------
+# Measured on the four segments where "steward" drifts (2026-08-21 seg 3/8/9/13):
+#   no context ......................... 4 distinct terms, 0 sentences lost
+#   context = whole previous segment ... 2 distinct terms, 2 sentences LOST
+#   context = last sentence only ....... 2 distinct terms, 0 sentences lost
+# Target-side decoder priming also stabilised terminology but dropped the
+# opening of 2 of 3 segments outright, so it is not used.
+
+# Two target sentences per language: a context sentence and the real one.
+TWO_SENT = [
+    "पहला वाक्य । दूसरा वाक्य ।",     # -> Malayalam
+    "पहला वाक्य । दूसरा वाक्य ।",     # -> Telugu
+    "पहला वाक्य । दूसरा वाक्य ।",     # -> Hindi
+]
+ONE_SENT = ["केवल एक ।"] * 3
+
+
+def test_context_is_prepended_to_the_source(context_on):
+    t = _translator_with_fake_model([TWO_SENT])
+    _run_with_timeout(lambda: t.translate_all_sync(
+        "Stewards made their income.", context="Remember the economic system."))
+
+    for sent in t.tokenizer.seen_batch:
+        assert "Remember the economic system" in sent, sent
+        assert "Stewards made their income" in sent, sent
+
+
+def test_only_the_last_context_sentence_is_used(context_on):
+    """Whole-segment context contaminated the current sentence; one is enough."""
+    t = _translator_with_fake_model([TWO_SENT])
+    _run_with_timeout(lambda: t.translate_all_sync(
+        "Stewards made their income.",
+        context="Not the master's wealth. Remember the economic system."))
+
+    sent = t.tokenizer.seen_batch[0]
+    assert "Remember the economic system" in sent
+    assert "master" not in sent, f"carried more than one context sentence: {sent}"
+
+
+def test_the_context_translation_is_discarded(context_on):
+    t = _translator_with_fake_model([TWO_SENT])
+    out = _run_with_timeout(lambda: t.translate_all_sync(
+        "The real sentence.", context="The context sentence."))
+
+    for lang in ("ml", "te", "hi"):
+        assert len(split_target_sentences_for_test(out[lang])) == 1, out[lang]
+
+
+def split_target_sentences_for_test(text):
+    from translator import split_target_sentences
+    return split_target_sentences(text)
+
+
+def test_missing_content_falls_back_to_translating_without_context(context_on):
+    """The guard that makes context safe.
+
+    If the target comes back with fewer sentences than the source had, the
+    context ate some of the real content — exactly what whole-segment context
+    did to seg9. Retry that language with no context rather than ship a
+    sentence the speaker never had translated.
+    """
+    # 1st call: only ONE target sentence, so nothing survives dropping the
+    # context. 2nd call (the retry) returns proper content.
+    t = _translator_with_fake_model([ONE_SENT, DECODED])
+    out = _run_with_timeout(lambda: t.translate_all_sync(
+        "The real sentence.", context="The context sentence."))
+
+    assert t.model.generate_calls == 2, "did not retry without context"
+    assert has_script(out["ml"], ML), out["ml"]
+    assert out["ml"].strip(), "returned an empty translation"
+
+
+def test_no_context_behaves_exactly_as_before():
+    """Regression: the default path must not change."""
+    t = _translator_with_fake_model()
+    out = _run_with_timeout(lambda: t.translate_all_sync("God is love."))
+
+    assert t.model.generate_calls == 1
+    assert set(out) == {"ml", "te", "hi"}
+    for sent in t.tokenizer.seen_batch:
+        assert sent.count("God is love") == 1
+
+
+async def test_translate_all_accepts_context_keyword(context_on):
+    import asyncio
+    t = _translator_with_fake_model([TWO_SENT])
+    t._lock = asyncio.Lock()
+    out = await t.translate_all("The real sentence.", context="The context one.")
+    assert set(out) == {"ml", "te", "hi"}
+
+
+def test_split_drops_punctuation_only_debris():
+    """The context's translation can collapse to a bare full stop.
+
+    Observed on 2026-08-21 seg8/seg20 with context enabled: the joined output
+    began ". . " and that debris was shipped to the screens. Counting debris as
+    a sentence also hides real content loss from the integrity guard.
+    """
+    from translator import split_target_sentences
+    assert split_target_sentences(". . असली वाक्य।") == ["असली वाक्य।"]
+    assert split_target_sentences(" . ") == []
+    assert split_target_sentences("60 units.") == ["60 units."]   # digits count
+
+
+def test_debris_context_triggers_the_integrity_guard(context_on):
+    """If the context translated to nothing, dropping it would eat real content.
+
+    After debris is filtered there is no context sentence left to drop, so the
+    recovered text is short by one and the guard must retry without context
+    rather than return a truncated caption.
+    """
+    debris = [". . पहला असली वाक्य । दूसरा असली वाक्य ।"] * 3
+    t = _translator_with_fake_model([debris, DECODED])
+    out = _run_with_timeout(lambda: t.translate_all_sync(
+        "First real one. Second real one.", context="The context sentence."))
+
+    assert t.model.generate_calls == 2, "shipped debris instead of retrying"
+    assert not out["ml"].lstrip().startswith("."), out["ml"]
+
+
+def test_context_ships_disabled():
+    """Opt-in, because measured context introduced a negation that wasn't said.
+
+    On 2026-08-21 seg20, context turned "respond accurately and appropriately"
+    into Malayalam "...will NOT be responding accurately and appropriately"
+    (ആയിരിക്കില്ല) and coined the malformed മേൽനോട്ടംക്കാരൻ. Against that it only
+    took distinct "steward" terms from 3 to 2, at 1.4x the MT latency.
+    The whole point of the audit was that fluent-but-wrong is the dangerous
+    failure, so terminology is not worth an invented negation. Use GLOSSARY,
+    which cannot change meaning. Turn this on only with A/B evidence for your
+    own speaker.
+    """
+    from config import MT_USE_CONTEXT
+    assert MT_USE_CONTEXT is False

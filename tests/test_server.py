@@ -63,3 +63,93 @@ def test_pipeline_failure_keeps_mic_socket_alive():
         assert got == ["status", "status"]  # processing -> listening, no crash
         # socket still usable afterwards
         mic.send_bytes(silence(0.1))
+
+
+def test_pipeline_gets_a_transcript_log(tmp_path):
+    """Real deployments must persist the service; nothing was logged before."""
+    from transcript_log import TranscriptLog
+    log = TranscriptLog(tmp_path)
+    app = create_app(stt=StubSTT("Praise the Lord."), translator=StubTranslator(),
+                     transcript=log)
+    assert app.state.pipeline.transcript is log
+
+
+def test_transcript_records_a_real_utterance(tmp_path):
+    import json
+    from transcript_log import TranscriptLog
+
+    app = create_app(stt=StubSTT("Praise the Lord."), translator=StubTranslator(),
+                     transcript=TranscriptLog(tmp_path))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()
+        mic.send_bytes(loud(2.0))
+        mic.send_bytes(silence(1.0))
+        [mic.receive_json() for _ in range(3)]
+
+    written = list(tmp_path.glob("*.jsonl"))
+    assert len(written) == 1
+    record = json.loads(written[0].read_text(encoding="utf-8"))
+    assert record["en"] == "Praise the Lord."
+    assert record["translations"]["hi"] == "hi:Praise the Lord."
+
+
+def test_mic_loop_flushes_a_stale_sentence_during_silence():
+    """Chunks that don't trigger processing are the chance to flush a held one."""
+    app = create_app(stt=StubSTT("an unfinished thought"), translator=StubTranslator())
+
+    class SpyPipeline:
+        def __init__(self, inner):
+            self.inner = inner
+            self.flushes = 0
+
+        async def process(self, audio):
+            return await self.inner.process(audio)
+
+        async def flush_if_stale(self):
+            self.flushes += 1
+            return await self.inner.flush_if_stale()
+
+    spy = SpyPipeline(app.state.pipeline)
+    app.state.pipeline = spy
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()          # ready
+        mic.send_bytes(silence(0.2))  # too short to trigger processing
+        mic.send_bytes(silence(0.2))
+
+    assert spy.flushes >= 1
+
+
+def test_qr_endpoint_serves_svg():
+    client = make_client()
+    response = client.get("/qr.svg")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert response.text.lstrip().startswith("<svg")
+
+
+def test_qr_encodes_the_host_the_client_connected_to():
+    """A tablet reaching us on 192.168.1.29 must get a QR for that same address,
+    not for whatever the server guessed its own IP to be."""
+    from qr import svg_for, view_url_for
+
+    client = make_client()
+    body = client.get("/qr.svg", headers={"host": "192.168.1.29:8080"}).text
+    assert body == svg_for(view_url_for("192.168.1.29:8080"))
+
+    other = client.get("/qr.svg", headers={"host": "10.0.0.5:8080"}).text
+    assert other != body
+
+
+def test_qr_falls_back_when_the_host_header_is_junk():
+    client = make_client()
+    response = client.get("/qr.svg", headers={"host": "not a valid host"})
+    assert response.status_code == 200
+    assert response.text.lstrip().startswith("<svg")
+
+
+def test_display_page_shows_the_qr():
+    client = make_client()
+    assert '/qr.svg' in client.get("/display").text

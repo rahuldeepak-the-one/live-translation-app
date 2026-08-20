@@ -35,6 +35,10 @@ function render() {
     }
     els.captions.appendChild(row);
   }
+  // Pin to the newest caption. The projector never scrolls by hand, and the
+  // container is a real scrolling box now (see common.css), so without this a
+  // caption taller than the remaining space would run off the bottom edge.
+  els.captions.scrollTop = els.captions.scrollHeight;
 }
 
 function connect() {

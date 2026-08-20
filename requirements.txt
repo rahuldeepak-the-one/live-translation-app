@@ -5,6 +5,7 @@ faster-whisper
 transformers<5  # IndicTransToolkit imports transformers.tokenization_utils.PreTrainedTokenizerBase, removed in transformers 5.x
 sentencepiece
 numpy
+segno            # QR code for /view, pure Python, no dependencies
 torch
 IndicTransToolkit
 pytest

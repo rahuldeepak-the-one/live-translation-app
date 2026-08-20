@@ -49,12 +49,13 @@ else:
     print('⚠️  No CUDA GPU found — running on CPU (will be slower)')
 "
 
-# --- Show local IP for tablet connection ---
+# --- Show the URLs people should open ---
+# Not `hostname -I | awk '{print $1}'`: this machine has a dozen addresses
+# (docker bridges, k3s/flannel, a VPN tunnel) and that would happily print an
+# unreachable one. netinfo.py picks the interface carrying the default route
+# and names the WiFi that phones have to be on.
 echo ""
-LOCAL_IP=$(hostname -I | awk '{print $1}')
-echo "📺 Projector/tablet:  http://${LOCAL_IP}:8080/display"
-echo "📱 Personal phones:   http://${LOCAL_IP}:8080/view"
-echo "🎤 Microphone page:   http://${LOCAL_IP}:8080/mic"
+python "$SCRIPT_DIR/netinfo.py"
 echo ""
 echo "🎤 Starting server..."
 echo "======================================"
