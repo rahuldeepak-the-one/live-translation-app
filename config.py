@@ -162,6 +162,29 @@ FILLER_TOKENS = frozenset(
 # back short, so the downside is latency, not lost content.
 MT_USE_CONTEXT = False
 
+# --- Source-side pre-editing ---
+# Some English words IndicTrans2 maps wrongly no matter how much context it has.
+# Rewriting the English on the way INTO the translator fixes them; the screens
+# and the transcript keep what the speaker actually said.
+#
+# Every row below is a measured before/after on real session text, not a guess.
+# Applied case-insensitively — the target scripts have no case, and only the
+# translator's input is affected.
+#
+# Add a row only after checking the replacement in ALL THREE languages: on
+# "not dishonesty", dropping the comma alone ("not dishonest behaviour") made
+# Malayalam say Jesus *praises* dishonest behaviour. Both halves of the rewrite
+# were needed.
+SOURCE_REWRITES = (
+    # "to contrast X" -> "is contrary to X" in ml, te AND hi.
+    # "compare" is correct in all three (താരതമ്യം / పోల్చడం / तुलना).
+    (r"\bcontrast\b", "compare"),
+
+    # "praises shrewdness, not dishonesty" lost the negative prefix in ml and
+    # te, becoming "praises cleverness, not HONESTY".
+    (r",\s*not dishonesty\b", " rather than dishonest behaviour"),
+)
+
 # --- Terminology glossary ---
 # Each segment is translated independently, so nothing carries a chosen term
 # forward: "steward" appeared as four different Malayalam words in one sermon

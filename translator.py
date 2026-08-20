@@ -12,7 +12,7 @@ import torch
 from config import (
     TARGET_LANGS, FLORES_CODES, INDICTRANS2_MODEL, NLLB_MODEL, TRANSLATOR_BACKEND,
     MT_NUM_BEAMS, MT_NO_REPEAT_NGRAM, MT_REPETITION_PENALTY, GLOSSARY,
-    MT_USE_CONTEXT,
+    MT_USE_CONTEXT, SOURCE_REWRITES,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,23 @@ _POST_NORMALIZE = {"ml": normalize_malayalam}
 def _postprocess(lang, text):
     normalize = _POST_NORMALIZE.get(lang)
     return normalize(text) if normalize else text
+
+
+def apply_source_rewrites(text):
+    """Rewrite English the model reliably mistranslates, before it is sent.
+
+    Case-insensitive: the target scripts have no case and this only ever
+    touches the translator's input. See config.SOURCE_REWRITES for the measured
+    justification of each row.
+    """
+    for pattern, replacement in SOURCE_REWRITES:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
+def split_source_sentences(text):
+    """Split English into sentences for independent translation."""
+    return [p.strip() for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p.strip()]
 
 
 def apply_glossary(lang, text):
@@ -151,17 +168,27 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
         self.processors = _make_processors()
         logger.info("IndicTrans2 loaded.")
 
-    def _generate(self, text, langs):
-        """One batched generate for the given languages.
+    def _generate(self, sentences, langs):
+        """One batched generate: every sentence x every language, one call.
 
-        Exactly one preprocess_batch push is paired with one postprocess_batch
-        pop per language — see _make_processors() for why that matters.
+        Sentences are separate batch rows rather than one concatenated input,
+        because inside a single input an earlier sentence bleeds into a later
+        one — seg9 of 2026-08-21 rendered "Stewards" as masters/owners in te
+        and hi purely because sentence 1 mentioned "the master". Each sentence
+        alone is correct.
+
+        preprocess_batch pushes one placeholder map per sentence and
+        postprocess_batch pops one per sentence, so push N / pop N per language
+        keeps the queue paired — see _make_processors() for why that matters.
         """
+        if isinstance(sentences, str):
+            sentences = [sentences]
         batch = []
         for lang in langs:
             batch.extend(
                 self.processors[lang].preprocess_batch(
-                    [text], src_lang=FLORES_CODES["en"], tgt_lang=FLORES_CODES[lang]
+                    sentences, src_lang=FLORES_CODES["en"],
+                    tgt_lang=FLORES_CODES[lang],
                 )
             )
         inputs = self.tokenizer(
@@ -180,20 +207,29 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
         decoded = self.tokenizer.batch_decode(
             out, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
+        n = len(sentences)
         result = {}
-        for lang, raw in zip(langs, decoded):
-            text_out = self.processors[lang].postprocess_batch(
-                [raw], lang=FLORES_CODES[lang]
-            )[0]
-            result[lang] = apply_glossary(lang, _postprocess(lang, text_out))
+        for i, lang in enumerate(langs):
+            raws = decoded[i * n:(i + 1) * n]
+            outs = self.processors[lang].postprocess_batch(
+                raws, lang=FLORES_CODES[lang]
+            )
+            result[lang] = " ".join(
+                apply_glossary(lang, _postprocess(lang, o)) for o in outs
+            )
         return result
 
     def translate_all_sync(self, text, context=""):
+        text = apply_source_rewrites(text)
         ctx = last_sentence(context) if (MT_USE_CONTEXT and context) else ""
         if not ctx:
-            return self._generate(text, TARGET_LANGS)
+            # Per-sentence: independent rows, still one generate call.
+            return self._generate(split_source_sentences(text) or [text],
+                                  TARGET_LANGS)
 
-        joined = self._generate(f"{ctx} {text}", TARGET_LANGS)
+        # Context mode keeps the single-input path: the recovery step drops the
+        # context's translation, which only makes sense on one joined output.
+        joined = self._generate([f"{ctx} {text}"], TARGET_LANGS)
 
         # Recovery. ctx is always exactly one sentence, so exactly one target
         # sentence is dropped. If what is left has fewer sentences than the
@@ -212,7 +248,8 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
             else:
                 result[lang] = " ".join(kept)
         if retry:
-            result.update(self._generate(text, retry))
+            result.update(self._generate(split_source_sentences(text) or [text],
+                                         retry))
         return {lang: result[lang] for lang in TARGET_LANGS}
 
 
@@ -230,6 +267,7 @@ class NLLBTranslator(_AsyncTranslatorBase):
     def translate_all_sync(self, text, context=""):
         # The fallback ignores context: it exists to keep the service alive when
         # IndicTrans2 will not load, not to match its quality.
+        text = apply_source_rewrites(text)
         result = {}
         for lang in TARGET_LANGS:
             self.tokenizer.src_lang = FLORES_CODES["en"]

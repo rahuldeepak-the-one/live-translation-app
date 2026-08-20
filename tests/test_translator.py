@@ -482,3 +482,96 @@ def test_context_ships_disabled():
     """
     from config import MT_USE_CONTEXT
     assert MT_USE_CONTEXT is False
+
+
+# --- Source-side pre-editing -------------------------------------------------
+# Some English words are mapped wrongly no matter how much context the model
+# has. Rewriting the English before it reaches the translator fixes them; the
+# screens and the transcript keep what the speaker actually said.
+
+def test_contrast_is_rewritten_to_compare():
+    """"to contrast X" came back as "is contrary to X" in all three languages.
+
+    Measured: the original was wrong in ml, te AND hi; "compare" is correct in
+    all three (ml താരതമ്യം, te పోల్చడం, hi तुलना). Also fixes seg28's
+    "Now contrast that with the sons of light".
+    """
+    from translator import apply_source_rewrites
+    assert apply_source_rewrites(
+        "the purpose of the parable is to contrast moral character."
+    ) == "the purpose of the parable is to compare moral character."
+
+
+def test_rewrites_are_case_insensitive():
+    """Target scripts have no case, so only the translator input is affected."""
+    from translator import apply_source_rewrites
+    assert "compare" in apply_source_rewrites("Contrast that with the sons of light.")
+
+
+def test_not_dishonesty_is_restructured():
+    """"praises shrewdness, not dishonesty" dropped the negative prefix.
+
+    ml and te both returned "praises cleverness, not HONESTY". Measured:
+    "rather than dishonest behaviour" is correct in all three, and both halves
+    are needed — "not dishonest behaviour" alone made ml say Jesus PRAISES
+    dishonest behaviour.
+    """
+    from translator import apply_source_rewrites
+    assert apply_source_rewrites("Jesus praises shrewdness, not dishonesty.") == \
+        "Jesus praises shrewdness rather than dishonest behaviour."
+
+
+def test_rewrites_leave_ordinary_text_alone():
+    from translator import apply_source_rewrites
+    for s in ("God is love.", "He confronts reality.",
+              "The steward reduced his own commission."):
+        assert apply_source_rewrites(s) == s
+
+
+# --- Per-sentence translation ------------------------------------------------
+
+def test_multi_sentence_input_is_translated_one_sentence_at_a_time():
+    """Cross-sentence bleed inside one input flipped who earned the commission.
+
+    seg9 is "Not the master's wealth. Remember the economic system. Stewards
+    made their income...". Translated whole, "master" from sentence 1 bled into
+    sentence 3 and te/hi rendered "Stewards" as masters/owners. Each sentence
+    alone is correct, so they go through as separate batch rows — still ONE
+    generate call.
+    """
+    t = _translator_with_fake_model([DECODED * 3])   # 3 langs x 3 sentences
+    _run_with_timeout(lambda: t.translate_all_sync(
+        "First one. Second one. Third one."))
+
+    assert t.model.generate_calls == 1, "must stay a single batched generate"
+    assert len(t.tokenizer.seen_batch) == 9, (
+        f"expected 3 languages x 3 sentences, got {len(t.tokenizer.seen_batch)}"
+    )
+    # each row carries exactly one sentence
+    for row in t.tokenizer.seen_batch:
+        assert sum(row.count(c) for c in ".?!") == 1, row
+
+
+def test_single_sentence_input_is_unchanged():
+    """Regression: the common case must still be 3 rows, one generate."""
+    t = _translator_with_fake_model()
+    out = _run_with_timeout(lambda: t.translate_all_sync("God is love."))
+    assert t.model.generate_calls == 1
+    assert len(t.tokenizer.seen_batch) == 3
+    assert set(out) == {"ml", "te", "hi"}
+
+
+def test_per_sentence_output_is_rejoined_in_order():
+    t = _translator_with_fake_model([DECODED * 3])
+    out = _run_with_timeout(lambda: t.translate_all_sync(
+        "First one. Second one. Third one."))
+    # three Malayalam sentences, joined
+    from translator import split_target_sentences
+    assert len(split_target_sentences(out["ml"])) == 3, out["ml"]
+
+
+def test_source_sentence_split():
+    from translator import split_source_sentences
+    assert split_source_sentences("One. Two? Three!") == ["One.", "Two?", "Three!"]
+    assert split_source_sentences("No terminator") == ["No terminator"]
+    assert split_source_sentences("") == []
