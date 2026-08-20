@@ -305,17 +305,60 @@ def test_glossary_prefers_the_longest_match(monkeypatch):
     assert T.apply_glossary("hi", "मालिकाना हक") == "स्वामित्व हक"
 
 
-def test_empty_glossary_is_a_noop():
+def test_empty_glossary_is_a_noop(monkeypatch):
+    """A language with no rows must be passed through untouched."""
+    import translator as T
+    monkeypatch.setattr(T, "GLOSSARY", {"ml": {}, "te": {}, "hi": {}})
+    assert T.apply_glossary("ml", "കാവൽക്കാരൻ") == "കാവൽക്കാരൻ"
+    assert T.apply_glossary("te", "స్టీవర్డ్") == "స్టీవర్డ్"
+
+
+def test_shipped_glossary_pins_the_agreed_terms():
+    """Terms chosen by the user after a replay showed what the model produces.
+
+    steward: ml കാര്യസ്ഥൻ, te గృహనిర్వాహకుడు, hi കാരभारी
+    master:  hi मालिक  (ml യജമാനൻ / te యజమాని already dominate unaided)
+    """
     from translator import apply_glossary
-    assert apply_glossary("ml", "കാവൽക്കാരൻ") == "കാവൽക്കാരൻ"
+    assert apply_glossary("ml", "കാവൽക്കാരൻ") == "കാര്യസ്ഥൻ"
+    assert apply_glossary("te", "స్టీవర్డ్") == "గృహనిర్వాహకుడు"
+    assert apply_glossary("hi", "प्रबंधक") == "कारभारी"
+    assert apply_glossary("hi", "मास्टर") == "मालिक"
 
 
-def test_shipped_glossary_is_empty():
-    """Guessing terms risks making it worse; the church fills this in."""
-    from config import GLOSSARY
-    assert all(not terms for terms in GLOSSARY.values()), (
-        "GLOSSARY has entries — make sure a native speaker chose them"
-    )
+# Every inflected form the model actually produced in the 2026-08-21 replay,
+# with the form it must become. The config comment demands each be checked;
+# this is that check. A malformed result here is the exact bug that appeared
+# when an earlier attempt mapped സ്റ്റീവർഡ് (which ends in a virama) instead of
+# an inflecting stem.
+OBSERVED_FORMS = [
+    # (lang, produced, must_become)
+    ("ml", "കാവൽക്കാരൻ",     "കാര്യസ്ഥൻ"),
+    ("ml", "കാവൽക്കാരന്",    "കാര്യസ്ഥന്"),
+    ("ml", "കാവൽക്കാരന്റെ",  "കാര്യസ്ഥന്റെ"),
+    ("ml", "മേൽനോട്ടക്കാരൻ", "കാര്യസ്ഥൻ"),
+    ("te", "స్టీవర్డ్",       "గృహనిర్వాహకుడు"),
+    ("te", "స్టీవార్డులు",    "గృహనిర్వాహకులు"),
+    ("te", "మాస్టర్",         "యజమాని"),
+    ("hi", "प्रबंधक",         "कारभारी"),
+    ("hi", "प्रबंधकों",       "कारभारियों"),
+    ("hi", "मास्टर",          "मालिक"),
+]
+
+
+@pytest.mark.parametrize("lang,produced,expected", OBSERVED_FORMS)
+def test_every_observed_form_maps_to_a_valid_form(lang, produced, expected):
+    from translator import apply_glossary
+    assert apply_glossary(lang, produced) == expected
+
+
+def test_glossary_does_not_touch_the_already_correct_term():
+    """The dominant, correct words must survive untouched."""
+    from translator import apply_glossary
+    assert apply_glossary("ml", "യജമാനൻ") == "യജമാനൻ"
+    assert apply_glossary("te", "యజమాని") == "యజమాని"
+    assert apply_glossary("hi", "कारभारी") == "कारभारी"
+    assert apply_glossary("hi", "मालिक") == "मालिक"
 
 
 # --- Sentence helpers for context recovery ---------------------------------

@@ -210,10 +210,41 @@ SOURCE_REWRITES = (
 # a native-speaker judgement about register (the sermon quotes KJV but also
 # speaks plainly), and a wrong entry is applied to every sentence for the rest
 # of the service. Verify each inflected form before adding a row.
+# Filled in after replaying the 2026-08-21 sermon through the current pipeline
+# and listing every form the model actually produced. Keys are the forms it
+# emits, values the agreed term. Every row is covered by
+# tests/test_translator.py::test_every_observed_form_maps_to_a_valid_form.
+#
+# Not listed on purpose: ml "master" (യജമാനൻ already dominates 4:1, and a stem
+# rule on ഉടമസ്ഥ would also corrupt ഉടമസ്ഥത "ownership") and te "steward"
+# transliterations beyond the two forms seen.
 GLOSSARY = {
-    "ml": {},
-    "te": {},
-    "hi": {},
+    "ml": {
+        # steward -> കാര്യസ്ഥൻ. The model said കാവൽക്കാരൻ ("watchman") in 5 of
+        # 8 segments. Stem-level: ൻ / ന് / ന്റെ all reattach correctly.
+        "കാവൽക്കാര": "കാര്യസ്ഥ",
+        "മേൽനോട്ടക്കാര": "കാര്യസ്ഥ",
+        # plural, listed whole: കാര്യസ്ഥ + മാർ would be wrong.
+        "സ്റ്റീവർമാർ": "കാര്യസ്ഥന്മാർ",
+    },
+    "te": {
+        # steward -> గృహనిర్వాహకుడు, which the model already produces unaided
+        # in 2 segments; the transliteration won 7. Longest key first, so the
+        # plural is rewritten before the singular.
+        "స్టీవార్డులు": "గృహనిర్వాహకులు",
+        "స్టీవర్డ్": "గృహనిర్వాహకుడు",
+        # master -> యజమాని. "మాస్టర్" reads as a schoolteacher.
+        "మాస్టర్": "యజమాని",
+    },
+    "hi": {
+        # steward -> कारभारी, the standard biblical Hindi term and already 9 of
+        # 11. Oblique plural first: प्रबंधक is a prefix of प्रबंधकों.
+        "प्रबंधकों": "कारभारियों",
+        "प्रबंधक": "कारभारी",
+        # master -> मालिक. "मास्टर" reads as a schoolteacher; "स्वामी" risks
+        # being heard as "Lord" and confused with God.
+        "मास्टर": "मालिक",
+    },
 }
 
 # --- Transcripts ---
