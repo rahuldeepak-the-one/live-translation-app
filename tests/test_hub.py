@@ -1,5 +1,6 @@
 import pytest
 from hub import BroadcastHub
+from display_state import initial_state
 
 
 class FakeWS:
@@ -17,7 +18,8 @@ async def test_register_replays_empty_history():
     hub = BroadcastHub()
     ws = FakeWS()
     await hub.register(ws)
-    assert ws.sent == [{"type": "history", "sentences": []}]
+    history = next(m for m in ws.sent if m["type"] == "history")
+    assert history == {"type": "history", "sentences": []}
 
 
 async def test_sentence_then_translation_broadcast_to_all():
@@ -28,7 +30,7 @@ async def test_sentence_then_translation_broadcast_to_all():
     await hub.publish_sentence(1, "God is love.")
     await hub.publish_translation(1, {"ml": "M", "te": "T", "hi": "H"})
     for ws in (a, b):
-        assert {"type": "sentence", "id": 1, "en": "God is love."} in ws.sent
+        assert {"type": "sentence", "id": 1, "en": "God is love.", "final": False} in ws.sent
         assert {"type": "translation", "id": 1, "ml": "M", "te": "T", "hi": "H"} in ws.sent
 
 
@@ -41,7 +43,8 @@ async def test_late_joiner_gets_history_with_translations():
     history = late.sent[0]
     assert history["type"] == "history"
     assert history["sentences"] == [
-        {"id": 1, "en": "Hello.", "translations": {"ml": "M", "te": "T", "hi": "H"}}
+        {"id": 1, "en": "Hello.", "translations": {"ml": "M", "te": "T", "hi": "H"},
+         "final": False}
     ]
 
 
@@ -71,7 +74,7 @@ async def test_unregister_stops_delivery():
     await hub.register(ws)
     hub.unregister(ws)
     await hub.publish_status("listening")
-    assert len(ws.sent) == 1  # only the history replay
+    assert len(ws.sent) == 2  # only the history + display replay from register()
 
 
 async def test_sentence_published_during_registration_not_lost():
@@ -110,7 +113,8 @@ async def test_republishing_a_sentence_updates_history_in_place():
     late = FakeWS()
     await hub.register(late)
     assert late.sent[0]["sentences"] == [
-        {"id": 1, "en": "But the translations are good.", "translations": None}
+        {"id": 1, "en": "But the translations are good.", "translations": None,
+         "final": False}
     ]
 
 
@@ -124,3 +128,70 @@ async def test_republishing_preserves_existing_translations():
     row = late.sent[0]["sentences"][0]
     assert row["en"] == "Hello there."
     assert row["translations"] == {"ml": "M", "te": "T", "hi": "H"}
+
+
+async def test_register_replays_display_state_after_history():
+    hub = BroadcastHub()
+    ws = FakeWS()
+    await hub.register(ws)
+    # Order matters: a page applies history first, then configures its lanes.
+    assert [m["type"] for m in ws.sent] == ["history", "display"]
+    assert ws.sent[1] == {"type": "display", **initial_state()}
+
+
+async def test_publish_display_is_retained_for_late_joiners():
+    hub = BroadcastHub()
+    await hub.publish_display({"lanes": ["ml", "te"], "focus": "ml", "rotate": 0})
+    late = FakeWS()
+    await hub.register(late)
+    assert late.sent[1] == {
+        "type": "display", "lanes": ["ml", "te"], "focus": "ml", "rotate": 0}
+
+
+async def test_publish_display_broadcasts_to_connected_screens():
+    hub = BroadcastHub()
+    ws = FakeWS()
+    await hub.register(ws)
+    ws.sent.clear()
+    await hub.publish_display({"lanes": ["hi"], "focus": None, "rotate": 0})
+    assert ws.sent == [
+        {"type": "display", "lanes": ["hi"], "focus": None, "rotate": 0}]
+
+
+async def test_publish_display_rejects_bad_state_and_keeps_the_old_one():
+    hub = BroadcastHub()
+    await hub.publish_display({"lanes": ["ml"], "focus": None, "rotate": 0})
+    with pytest.raises(ValueError):
+        await hub.publish_display({"lanes": []})
+    assert hub.display_state["lanes"] == ["ml"]
+
+
+async def test_sentence_carries_final_flag():
+    hub = BroadcastHub()
+    ws = FakeWS()
+    await hub.register(ws)
+    await hub.publish_sentence(1, "Half a sen", final=False)
+    await hub.publish_sentence(1, "Half a sentence finished.", final=True)
+    sentences = [m for m in ws.sent if m["type"] == "sentence"]
+    assert sentences == [
+        {"type": "sentence", "id": 1, "en": "Half a sen", "final": False},
+        {"type": "sentence", "id": 1, "en": "Half a sentence finished.", "final": True},
+    ]
+
+
+async def test_history_retains_final():
+    hub = BroadcastHub()
+    await hub.publish_sentence(1, "Done.", final=True)
+    late = FakeWS()
+    await hub.register(late)
+    assert late.sent[0]["sentences"] == [
+        {"id": 1, "en": "Done.", "translations": None, "final": True}]
+
+
+async def test_revising_a_sentence_updates_final_in_history():
+    hub = BroadcastHub()
+    await hub.publish_sentence(1, "Growing", final=False)
+    await hub.publish_sentence(1, "Growing still.", final=True)
+    late = FakeWS()
+    await hub.register(late)
+    assert late.sent[0]["sentences"][0]["final"] is True

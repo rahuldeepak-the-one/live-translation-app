@@ -26,8 +26,9 @@ async def test_speech_flows_to_screens():
 
     assert result == (1, "Hello world.")
     types = [m["type"] for m in screen.sent]
-    assert types == ["history", "sentence", "translation"]
-    assert screen.sent[2]["ml"] == "ml:Hello world."
+    assert types == ["history", "display", "sentence", "translation"]
+    translation = next(m for m in screen.sent if m["type"] == "translation")
+    assert translation["ml"] == "ml:Hello world."
 
 
 async def test_ids_increment():
@@ -44,7 +45,7 @@ async def test_empty_transcription_publishes_nothing():
     pipe = UtterancePipeline(StubSTT(""), StubTranslator(), hub)
 
     assert await pipe.process(None) is None
-    assert [m["type"] for m in screen.sent] == ["history"]
+    assert [m["type"] for m in screen.sent] == ["history", "display"]
 
 
 class SeqSTT:
@@ -78,7 +79,7 @@ async def test_complete_sentence_translates_immediately():
 
     await pipe.process(None)
 
-    assert kinds(screen) == ["history", "sentence", "translation"]
+    assert kinds(screen) == ["history", "display", "sentence", "translation"]
 
 
 async def test_unfinished_sentence_publishes_english_but_holds_translation():
@@ -89,8 +90,9 @@ async def test_unfinished_sentence_publishes_english_but_holds_translation():
 
     await pipe.process(None)
 
-    assert kinds(screen) == ["history", "sentence"]
-    assert screen.sent[1]["en"] == "But the translations"
+    assert kinds(screen) == ["history", "display", "sentence"]
+    sentence = next(m for m in screen.sent if m["type"] == "sentence")
+    assert sentence["en"] == "But the translations"
 
 
 async def test_continuation_joins_and_translates_the_whole_sentence():
@@ -142,7 +144,7 @@ async def test_speech_after_a_long_silence_starts_a_new_sentence():
     )
 
     await pipe.process(None)
-    assert kinds(screen) == ["history", "sentence"]
+    assert kinds(screen) == ["history", "display", "sentence"]
 
     clock.advance(MAX_SENTENCE_HOLD_S + 0.1)
     await pipe.process(None)
@@ -200,7 +202,7 @@ async def test_colon_does_not_end_a_sentence():
 
     await pipe.process(None)
 
-    assert kinds(screen) == ["history", "sentence"]
+    assert kinds(screen) == ["history", "display", "sentence"]
 
 
 async def test_semicolon_does_not_end_a_sentence():
@@ -212,7 +214,7 @@ async def test_semicolon_does_not_end_a_sentence():
 
     await pipe.process(None)
 
-    assert kinds(screen) == ["history", "sentence"]
+    assert kinds(screen) == ["history", "display", "sentence"]
 
 
 async def test_flush_if_stale_translates_an_abandoned_sentence():
@@ -225,7 +227,7 @@ async def test_flush_if_stale_translates_an_abandoned_sentence():
                             clock=clock)
 
     await pipe.process(None)
-    assert kinds(screen) == ["history", "sentence"]
+    assert kinds(screen) == ["history", "display", "sentence"]
 
     clock.advance(MAX_SENTENCE_HOLD_S + 0.1)
     assert await pipe.flush_if_stale() == 1
@@ -245,7 +247,7 @@ async def test_flush_if_stale_is_a_noop_before_the_hold_expires():
     clock.advance(0.2)
 
     assert await pipe.flush_if_stale() is None
-    assert kinds(screen) == ["history", "sentence"]
+    assert kinds(screen) == ["history", "display", "sentence"]
 
 
 async def test_flush_if_stale_is_a_noop_with_nothing_pending():

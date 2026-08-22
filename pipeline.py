@@ -131,16 +131,19 @@ class UtterancePipeline:
         # while the speaker was still going. MAX_PENDING_CHARS bounds the length.
         touched = self._clock()
 
-        # English first, always — this is what keeps the captions feeling live.
-        # Re-publishing the same id revises the row rather than duplicating it.
-        await self.hub.publish_sentence(sid, joined)
-
         held_for = self._clock() - touched
         flush = (
             looks_complete(joined)
             or held_for >= MAX_SENTENCE_HOLD_S
             or len(joined) >= MAX_PENDING_CHARS
         )
+
+        # English first, always — this is what keeps the captions feeling live.
+        # Re-publishing the same id revises the row rather than duplicating it.
+        # `final` is exactly the flush decision: a held sentence is still
+        # growing and renders grey, a flushed one is frozen and renders solid.
+        await self.hub.publish_sentence(sid, joined, final=flush)
+
         if not flush:
             self._pending = {"id": sid, "text": joined, "touched": touched}
             logger.debug("#%d held (%.1fs, %d chars): %s", sid, held_for, len(joined), joined)
