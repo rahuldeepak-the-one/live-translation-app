@@ -81,11 +81,18 @@ def clean_for_translation(text):
 
 
 class UtterancePipeline:
-    def __init__(self, stt, translator, hub, transcript=None, clock=time.time):
+    def __init__(self, stt, translator, hub, transcript=None, clock=time.time,
+                 on_chunk_text=None):
         self.stt = stt
         self.translator = translator
         self.hub = hub
         self.transcript = transcript
+        # Stage 2b instrumentation. Reports the RAW text of each chunk, which
+        # process() otherwise swallows into the joined pending sentence. Ground
+        # truth for a bad boundary is whether the next chunk starts lowercase,
+        # and only the per-chunk text can answer that. A callback rather than a
+        # changed return shape, so no existing caller moves.
+        self._on_chunk_text = on_chunk_text
         self._clock = clock
         self._counter = 0
         self._pending = None       # {"id", "text", "touched"} or None
@@ -100,6 +107,15 @@ class UtterancePipeline:
         if not text:
             return None
         t_stt = self._clock() - t0
+
+        if self._on_chunk_text is not None:
+            try:
+                self._on_chunk_text(text)
+            except Exception:
+                # Instrumentation must never cost an utterance — same rule the
+                # transcript log follows. A dropped measurement is a nuisance;
+                # a dropped sentence is a congregation reading nothing.
+                logger.exception("on_chunk_text failed — continuing without it")
 
         # Speech arriving after the hold expired belongs to a new sentence, not
         # the held one: that much silence means the speaker moved on, and
@@ -131,12 +147,13 @@ class UtterancePipeline:
         # while the speaker was still going. MAX_PENDING_CHARS bounds the length.
         touched = self._clock()
 
-        held_for = self._clock() - touched
-        flush = (
-            looks_complete(joined)
-            or held_for >= MAX_SENTENCE_HOLD_S
-            or len(joined) >= MAX_PENDING_CHARS
-        )
+        # Time is deliberately absent from this decision. Silence is what ends
+        # a held sentence, and flush_if_stale() is where it is measured; the
+        # `held_for >= MAX_SENTENCE_HOLD_S` disjunct that used to sit here was
+        # computed from two clock reads with nothing between them, so it was
+        # always ~0 -- and had it measured anything it would have measured
+        # sentence AGE, which is what the 2026-08-21 audit removed.
+        flush = looks_complete(joined) or len(joined) >= MAX_PENDING_CHARS
 
         # English first, always — this is what keeps the captions feeling live.
         # Re-publishing the same id revises the row rather than duplicating it.
@@ -146,7 +163,7 @@ class UtterancePipeline:
 
         if not flush:
             self._pending = {"id": sid, "text": joined, "touched": touched}
-            logger.debug("#%d held (%.1fs, %d chars): %s", sid, held_for, len(joined), joined)
+            logger.debug("#%d held (%d chars): %s", sid, len(joined), joined)
             return sid, joined
 
         return await self._flush(sid, joined, t_stt)

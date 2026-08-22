@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from hub import BroadcastHub
 from netinfo import local_urls
 from qr import svg_for, view_url_for
 from pipeline import UtterancePipeline
+from segmentation_log import SegmentationLog
 from transcript_log import TranscriptLog
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -90,6 +92,7 @@ def create_app(stt=None, translator=None, transcript=None):
             application.state.pipeline = UtterancePipeline(
                 application.state.stt, application.state.translator,
                 application.state.hub, transcript=application.state.transcript,
+                on_chunk_text=application.state.seglog.record_text,
             )
         logger.info("Server ready on http://%s:%d", HOST, PORT)
         yield
@@ -100,13 +103,19 @@ def create_app(stt=None, translator=None, transcript=None):
     app.state.stt = stt
     app.state.translator = translator
     app.state.transcript = transcript if transcript is not None else TranscriptLog()
+    # Stage 2b instrumentation. App-level rather than per-connection because the
+    # pipeline that feeds it chunk text is app-level too, and the deployment has
+    # exactly one microphone. Two concurrent mics would interleave records;
+    # that is a non-case here, not a supported one.
+    app.state.seglog = SegmentationLog(app.state.transcript, time.time)
     # Build eagerly when both deps are already supplied (e.g. tests injecting
     # stubs via a bare TestClient) so we don't depend on the ASGI lifespan
     # "startup" event having fired. Real deployments pass stt=translator=None
     # and the pipeline is built lazily in lifespan once the models load; its
     # `is None` guards keep the two paths idempotent.
     app.state.pipeline = (
-        UtterancePipeline(stt, translator, hub, transcript=app.state.transcript)
+        UtterancePipeline(stt, translator, hub, transcript=app.state.transcript,
+                          on_chunk_text=app.state.seglog.record_text)
         if stt is not None and translator is not None else None
     )
 
@@ -132,7 +141,17 @@ def create_app(stt=None, translator=None, transcript=None):
                         buf.clear()
                 elif "bytes" in message and message["bytes"] is not None:
                     buf.add_chunk(message["bytes"])
-                    if buf.should_process():
+                    reason = buf.cut_reason()
+                    if reason is not None:
+                        # Stage 2b: record WHY we cut and how much silence was
+                        # really at the tail, before the buffer is cleared.
+                        # See segmentation_log for why the useful number is the
+                        # gap measured AFTER this, not anything available now.
+                        app.state.seglog.record_cut(
+                            reason,
+                            buf.duration_seconds(),
+                            buf.trailing_silence_seconds(),
+                        )
                         await ws.send_json({"type": "status", "state": "processing"})
                         await app.state.hub.publish_status("processing")
                         try:
@@ -145,12 +164,23 @@ def create_app(stt=None, translator=None, transcript=None):
                         await ws.send_json({"type": "status", "state": "listening"})
                         await app.state.hub.publish_status("listening")
                     else:
+                        # Speech audible again after a cut closes the open
+                        # segmentation record: this gap is the one measurement
+                        # that separates a breath from a finished sentence.
+                        # Idempotent, so calling it on every speech-bearing
+                        # chunk is fine.
+                        if buf.has_speech():
+                            app.state.seglog.record_speech_resumed()
                         # Quiet chunk: the only chance to translate a sentence
                         # the speaker started and never finished, since
                         # process() runs on speech only.
                         await app.state.pipeline.flush_if_stale()
         except WebSocketDisconnect:
             pass
+        # Whatever cut is still open gets written with a null gap rather than
+        # being lost — the last utterance before the mic goes quiet is exactly
+        # the one a naive implementation drops.
+        app.state.seglog.close()
         logger.info("Mic disconnected.")
 
     @app.websocket("/ws/captions")

@@ -90,7 +90,12 @@ def test_transcript_records_a_real_utterance(tmp_path):
 
     written = list(tmp_path.glob("*.jsonl"))
     assert len(written) == 1
-    record = json.loads(written[0].read_text(encoding="utf-8"))
+    # The file is JSONL and now carries Stage 2b `kind: "cut"` rows alongside
+    # utterances, so pick the utterance rather than parsing the whole file as
+    # one object. A row with no `kind` is an utterance.
+    rows = [json.loads(line) for line in
+            written[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+    record = next(r for r in rows if r.get("kind") is None)
     assert record["en"] == "Praise the Lord."
     assert record["translations"]["hi"] == "hi:Praise the Lord."
 
@@ -239,3 +244,101 @@ def test_unauthenticated_socket_still_receives_captions():
     with client.websocket_connect("/ws/captions") as screen:
         assert screen.receive_json()["type"] == "history"
         assert screen.receive_json()["type"] == "display"
+
+
+def _cut_rows(tmp_path):
+    import json
+    written = list(tmp_path.glob("*.jsonl"))
+    if not written:
+        return []
+    rows = [json.loads(line) for line in
+            written[0].read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [r for r in rows if r.get("kind") == "cut"]
+
+
+def test_a_cut_reaches_the_transcript_with_its_reason_and_text(tmp_path):
+    # The whole point of Stage 2b's instrumentation: after a service there must
+    # be a file that says, per cut, why we cut and what the chunk said.
+    from transcript_log import TranscriptLog
+
+    app = create_app(stt=StubSTT("...to contrast moral character."),
+                     translator=StubTranslator(), transcript=TranscriptLog(tmp_path))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()
+        mic.send_bytes(loud(2.0))
+        mic.send_bytes(silence(1.0))       # trailing silence -> a "silence" cut
+        [mic.receive_json() for _ in range(3)]
+
+    cuts = _cut_rows(tmp_path)
+    assert len(cuts) == 1, cuts
+    cut = cuts[0]
+    assert cut["reason"] == "silence"
+    assert cut["text"] == "...to contrast moral character."
+    assert cut["looked_complete"] is True      # exactly the wrong call we hunt
+    assert cut["chunk_s"] > 0
+    assert cut["ts"]
+
+
+def test_a_forced_cut_is_labelled_max_buffer(tmp_path):
+    # Continuous speech past MAX_BUFFER_S: the safe kind of cut, and the label
+    # has to distinguish it or the analysis cannot separate the populations.
+    from transcript_log import TranscriptLog
+    from config import MAX_BUFFER_S
+
+    app = create_app(stt=StubSTT("the man's ability to un-"),
+                     translator=StubTranslator(), transcript=TranscriptLog(tmp_path))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()
+        mic.send_bytes(loud(MAX_BUFFER_S + 0.5))
+        [mic.receive_json() for _ in range(3)]
+
+    cuts = _cut_rows(tmp_path)
+    assert len(cuts) == 1, cuts
+    assert cuts[0]["reason"] == "max_buffer"
+    assert cuts[0]["looked_complete"] is False
+
+
+def test_speech_resuming_after_a_cut_records_the_gap(tmp_path):
+    # speech_gap_s is the field the threshold is chosen from; if the wiring
+    # never fills it, a whole service produces an unusable file.
+    from transcript_log import TranscriptLog
+
+    app = create_app(stt=StubSTT("first chunk."), translator=StubTranslator(),
+                     transcript=TranscriptLog(tmp_path))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()
+        mic.send_bytes(loud(2.0))
+        mic.send_bytes(silence(1.0))          # cut here
+        [mic.receive_json() for _ in range(3)]
+        mic.send_bytes(loud(0.3))             # speech again, below trigger size
+
+    cuts = _cut_rows(tmp_path)
+    assert len(cuts) == 1, cuts
+    assert cuts[0]["speech_gap_s"] is not None
+    assert cuts[0]["speech_gap_s"] >= 0
+
+
+def test_instrumentation_does_not_change_what_the_screens_see(tmp_path):
+    # Stage 2b step one is measurement only. If recording altered the captions,
+    # the data would describe a system we do not actually run on Sunday.
+    from transcript_log import TranscriptLog
+
+    app = create_app(stt=StubSTT("Praise the Lord."), translator=StubTranslator(),
+                     transcript=TranscriptLog(tmp_path))
+    client = TestClient(app)
+    with client.websocket_connect("/ws/captions") as screen:
+        assert screen.receive_json()["type"] == "history"
+        assert screen.receive_json()["type"] == "display"
+        with client.websocket_connect("/ws/mic") as mic:
+            mic.receive_json()
+            mic.send_bytes(loud(2.0))
+            mic.send_bytes(silence(1.0))
+            [mic.receive_json() for _ in range(3)]
+        msgs = [screen.receive_json() for _ in range(4)]
+    types = [m["type"] for m in msgs]
+    assert "sentence" in types and "translation" in types
+    sent = next(m for m in msgs if m["type"] == "sentence")
+    assert sent["en"] == "Praise the Lord."

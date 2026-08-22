@@ -48,17 +48,55 @@ class AudioBuffer:
         rms = np.sqrt(np.mean(tail.astype(np.float32) ** 2))
         return rms < SILENCE_THRESHOLD
 
-    def should_process(self):
+    def trailing_silence_seconds(self):
+        """How much silence is actually at the tail, not merely whether 0.6s is.
+
+        has_trailing_silence() answers a yes/no at SILENCE_DURATION_S, and
+        should_process() fires the instant that becomes true — so the silence
+        present at a cut is always ~0.6-0.9s and tells us nothing. A breath and
+        a finished thought both clear that bar. Measuring the real length is
+        step one of choosing SENTENCE_GRACE_S from evidence instead of guessing
+        it, which is how MAX_SENTENCE_HOLD_S came to be 4.0s and split 26 of 28
+        sentences on 2026-08-21.
+
+        Walks back from the end while each window is below the threshold, so
+        earlier silence in the buffer is not counted — only the final run.
+        """
+        rms = self._window_rms()
+        if not rms.size:
+            return 0.0
+        quiet = 0
+        for value in rms[::-1]:
+            if value >= SILENCE_THRESHOLD:
+                break
+            quiet += 1
+        return quiet * SPEECH_WINDOW_S
+
+    def cut_reason(self):
+        """Why this buffer is being cut, or None if it is not.
+
+        Names the branch of should_process() that fires, in the same order, so
+        the label describes what the code actually did. "silence" means the
+        speaker paused; "max_buffer" means they never did and the cut lands
+        mid-word. That distinction is the whole point of the instrumentation:
+        forced cuts end unterminated and are safely rejoined, while
+        silence-triggered cuts are the ones Whisper punctuates as though the
+        sentence had ended.
+        """
         duration = self.duration_seconds()
         if duration < MIN_SPEECH_S:
-            return False
+            return None
         if not self.has_speech():
-            # Nothing but silence/hiss — drop it rather than force-flushing at
-            # MAX_BUFFER_S, which is what produced the phantom captions.
-            return False
+            return None
         if duration >= MAX_BUFFER_S:
-            return True
-        return bool(duration >= MIN_TRIGGER_S and self.has_trailing_silence())
+            return "max_buffer"
+        if duration >= MIN_TRIGGER_S and self.has_trailing_silence():
+            return "silence"
+        return None
+
+    def should_process(self):
+        # Delegates so the decision and its label can never drift apart.
+        return self.cut_reason() is not None
 
     def get_audio_and_clear(self):
         audio = np.frombuffer(bytes(self.buffer), dtype=np.int16)

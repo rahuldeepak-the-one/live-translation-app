@@ -531,3 +531,103 @@ async def test_context_survives_a_normal_sentence_boundary():
 
     assert tr.calls[1][1] == "First one."
     assert tr.calls[2][1] == "Second one."
+
+
+# --- Stage 2b instrumentation -------------------------------------------------
+
+async def test_chunk_text_callback_receives_the_raw_transcription():
+    """The cut record needs THIS chunk's text, not the joined sentence.
+
+    Ground truth for a bad boundary is whether the NEXT chunk starts lowercase,
+    which only the raw per-chunk text can answer. process() returns the joined
+    pending text, so the raw chunk is exposed through a callback rather than by
+    changing the return shape and moving every existing caller.
+    """
+    seen = []
+    hub = BroadcastHub()
+    pipe = UtterancePipeline(StubSTT("with practical foresight."), StubTranslator(),
+                             hub, on_chunk_text=seen.append)
+    await pipe.process(None)
+    assert seen == ["with practical foresight."]
+
+
+async def test_chunk_text_callback_fires_per_chunk_not_per_sentence():
+    # A held sentence spans several chunks; each must be reported separately,
+    # because the join is exactly what we are trying to evaluate.
+    seen = []
+    hub = BroadcastHub()
+    pipe = UtterancePipeline(SeqSTT("The purpose is to contrast moral character.",
+                                    "with practical foresight."),
+                             StubTranslator(), hub, on_chunk_text=seen.append)
+    await pipe.process(None)
+    await pipe.process(None)
+    assert seen == ["The purpose is to contrast moral character.",
+                    "with practical foresight."]
+
+
+async def test_chunk_text_callback_is_optional():
+    hub = BroadcastHub()
+    pipe = UtterancePipeline(StubSTT("Hello."), StubTranslator(), hub)
+    assert await pipe.process(None) == (1, "Hello.")
+
+
+async def test_chunk_text_callback_not_called_on_an_empty_transcription():
+    seen = []
+    hub = BroadcastHub()
+    pipe = UtterancePipeline(StubSTT(""), StubTranslator(), hub, on_chunk_text=seen.append)
+    await pipe.process(None)
+    assert seen == []
+
+
+async def test_a_failing_callback_never_takes_the_service_down():
+    # Instrumentation must not be able to drop an utterance. Same rule the
+    # transcript log follows.
+    def boom(_text):
+        raise RuntimeError("instrumentation exploded")
+
+    hub = BroadcastHub()
+    pipe = UtterancePipeline(StubSTT("Hello."), StubTranslator(), hub, on_chunk_text=boom)
+    assert await pipe.process(None) == (1, "Hello.")
+
+
+async def test_no_clock_reading_inside_process_can_flush_a_fragment():
+    """Only completeness and length decide the flush; elapsed time never does.
+
+    process() used to compute `held_for` from two clock reads with nothing
+    between them, so it was always ~0 and its `held_for >= MAX_SENTENCE_HOLD_S`
+    disjunct could not fire. Worse than dead: had it measured anything it would
+    have measured sentence AGE, the exact thing the 2026-08-21 audit removed in
+    favour of silence (see test_hold_timeout_measures_silence_not_sentence_age).
+
+    A clock that jumps a full hold between reads proves the disjunct is gone
+    rather than merely quiet — under the old code this fragment reached the
+    translator.
+    """
+    from config import MAX_SENTENCE_HOLD_S
+
+    class JumpyClock:
+        """Advances a full hold on every single read."""
+        def __init__(self):
+            self.t = 1000.0
+
+        def __call__(self):
+            self.t += MAX_SENTENCE_HOLD_S
+            return self.t
+
+    class Rec:
+        def __init__(self):
+            self.seen = []
+
+        async def translate_all(self, text, context=""):
+            self.seen.append(text)
+            return {"ml": "", "te": "", "hi": ""}
+
+    rec = Rec()
+    pipe = UtterancePipeline(
+        StubSTT("The steward's unethical behavior is never"),
+        rec, BroadcastHub(), clock=JumpyClock(),
+    )
+    await pipe.process(None)
+
+    assert rec.seen == [], f"a fragment reached the translator: {rec.seen}"
+    assert pipe._pending is not None, "the fragment was not held"
