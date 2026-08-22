@@ -32,6 +32,7 @@ Expected feel: English appears ~1â€“1.5s behind the speaker; translations ~2.5â€
 | `/display` | tablet plugged into the projector | all 4 languages, big type, scannable QR code to `/view` |
 | `/view` | anyone's phone on the same WiFi | choose your language, read along as one flowing transcript; scroll back, resize text, screen stays awake |
 | `/admin` | the operator | pick audio source, see mic level (dead-mic warning), pause, latency stats |
+| `/control/<token>` | the operator's phone | turn languages on and off, pin one full-wall, auto-rotate. The token is printed by `start.sh` and is new every run |
 
 ## Running it
 

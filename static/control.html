@@ -2,17 +2,67 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="robots" content="noindex, nofollow">
-  <title>Operator Control</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Live Translation — Operator</title>
+  <link rel="stylesheet" href="/static/common.css">
+  <style>
+    main { gap: 1.6rem; }
+    h2 { font-size: 0.72rem; letter-spacing: 0.09em; text-transform: uppercase;
+         color: #7d8fa3; margin-bottom: 0.6rem; font-weight: 700; }
+    .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
+    .row.wide { grid-template-columns: repeat(2, 1fr); }
+    /* Five buttons (All + 4 languages) squeeze onto one row at 4 columns on a
+       phone; three columns wraps them onto two comfortable rows instead. */
+    #focus { grid-template-columns: repeat(3, 1fr); }
+    button {
+      padding: 0.9rem 0.3rem; font-size: 0.95rem; font-family: inherit;
+      background: #16202b; color: #e8eef5; border: 1px solid #2b3948;
+      border-radius: 0.5rem; cursor: pointer; min-width: 0;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    button.on, button.active { background: #1d4ed8; border-color: #3b82f6; }
+    button:disabled { opacity: 0.35; cursor: default; }
+    #mirror { color: #7d8fa3; font-size: 0.9rem; line-height: 1.6; }
+    #mirror b { color: #e8eef5; }
+  </style>
 </head>
 <body>
-  <!-- Placeholder page. The token-gated route this serves is built in Task 3;
-       the operator UI itself (lane toggles, focus, rotation) is Task 7. -->
+  <header>
+    <span><span id="status-dot"></span><span id="status-text">connecting…</span></span>
+    <span>Operator</span>
+  </header>
   <main>
-    <h1>Operator Control</h1>
-    <p>Coming soon.</p>
+    <section>
+      <h2>Languages on the wall</h2>
+      <div class="row" id="lanes">
+        <button type="button" data-lang="en">English</button>
+        <button type="button" data-lang="ml">മലയാളം</button>
+        <button type="button" data-lang="te">తెలుగు</button>
+        <button type="button" data-lang="hi">हिन्दी</button>
+      </div>
+    </section>
+    <section>
+      <h2>Full wall</h2>
+      <div class="row" id="focus">
+        <button type="button" data-focus="">All</button>
+        <button type="button" data-focus="en">English</button>
+        <button type="button" data-focus="ml">മലయാളം</button>
+        <button type="button" data-focus="te">తెలుగు</button>
+        <button type="button" data-focus="hi">हिन्दी</button>
+      </div>
+    </section>
+    <section>
+      <h2>Auto-rotate</h2>
+      <div class="row wide">
+        <button type="button" id="rotate-off">Off</button>
+        <button type="button" id="rotate-on">Every 20s</button>
+      </div>
+    </section>
+    <section>
+      <h2>On the wall now</h2>
+      <p id="mirror">…</p>
+    </section>
   </main>
+  <script type="module" src="/static/control.js"></script>
 </body>
 </html>

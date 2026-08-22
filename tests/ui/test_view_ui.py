@@ -39,7 +39,7 @@ def run_harness(suite):
 
 
 @pytest.mark.skipif(CHROME is None, reason="no Chrome/Chromium on PATH")
-@pytest.mark.parametrize("suite", ["view", "display"])
+@pytest.mark.parametrize("suite", ["view", "display", "control"])
 def test_page_behaviour(suite):
     checks = run_harness(suite)
     assert checks, "harness ran no checks"

@@ -26,7 +26,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def translate_path(self, path):
         path = path.split("?", 1)[0].split("#", 1)[0]
-        if path in ("/view", "/display"):
+        if path in ("/view", "/display", "/control"):
             return str(ROOT / "static" / f"{path.lstrip('/')}.html")
         return str(ROOT / path.lstrip("/"))
 
