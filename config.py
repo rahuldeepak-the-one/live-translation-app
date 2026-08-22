@@ -261,3 +261,12 @@ MT_NUM_BEAMS = 5
 # it. These two bound the damage.
 MT_NO_REPEAT_NGRAM = 4
 MT_REPETITION_PENALTY = 1.15
+
+# --- Wall display (stage 1) ---
+# The wall's startup state. /control overrides it at runtime; nothing persists
+# across a restart, which is deliberate — a service always begins predictable.
+DEFAULT_LANES = ["en", "ml", "te", "hi"]
+# Auto-rotate bounds. Below 5s nobody finishes a line; above 120s it is not
+# rotation, it is a pin the operator forgot about.
+ROTATE_MIN_S = 5
+ROTATE_MAX_S = 120
