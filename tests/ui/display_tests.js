@@ -94,12 +94,22 @@ async function run() {
   // real server would still have) and a NARROWED lane set on ws2 itself, and
   // assert the wall renders exactly that — not all four, and not by having
   // silently kept running on the old (closed) `ws`.
+  // The replayed backlog must be DISTINCT from the pre-close one. It used to be
+  // byte-identical, which made the assertion below unfalsifiable: a page that
+  // ignored the replayed `history` entirely and kept rendering its pre-close
+  // cache still had >= 12 spans and still passed. The content has to be
+  // something only the NEW history could have produced.
   const reconnectSentences = Array.from({ length: 12 }, (_, i) => {
-    const id = i + 1;
-    const { type, id: _id, ...translations } = translation(id);
+    const id = 101 + i;
     return {
-      id, en: `Projector caption number ${id} is fairly long.`,
-      translations, final: true,
+      id,
+      en: `Reconnect caption ${id}.`,
+      translations: {
+        ml: `പുനഃസംയോജനം ${id}.`,
+        te: `మళ్లీ కనెక్ట్ ${id}.`,
+        hi: `पुनः जुड़ाव ${id}।`,
+      },
+      final: true,
     };
   });
   ws2.onopen();
@@ -108,10 +118,19 @@ async function run() {
   check("reconnect restores the narrowed lane set on the new socket",
         lanes().length === 1 && lanes()[0].dataset.lang === "ml",
         lanes().map((l) => l.dataset.lang).join(","));
+
   const mlAfterReconnect = doc.querySelector('.lane[data-lang="ml"] .lane-flow');
-  check("reconnect's narrowed lane holds the backlog replayed on the new socket",
-        mlAfterReconnect && mlAfterReconnect.querySelectorAll("span").length >= 12,
-        mlAfterReconnect && mlAfterReconnect.querySelectorAll("span").length);
+  const reconnectText = mlAfterReconnect ? mlAfterReconnect.textContent : "";
+  check("reconnect's lane renders the backlog replayed on the NEW socket",
+        reconnectText.includes("പുനഃസംയോജനം 101")
+        && reconnectText.includes("പുനഃസംയോജനം 112"),
+        reconnectText.slice(0, 80));
+  // history REPLACES state; a page that appended would still be showing the
+  // pre-close captions underneath, and a reconnect mid-service would then show
+  // the passage twice.
+  check("reconnect history replaces the pre-close cache rather than appending",
+        !reconnectText.includes("മലയാളം വാക്യം"),
+        reconnectText.slice(0, 80));
 
   // --- focus -------------------------------------------------------------
   ws2.deliver(display(["en", "ml", "te", "hi"], "ml", 0));
@@ -130,8 +149,12 @@ async function run() {
   ws2.deliver(display(["en", "ml", "te", "hi"], null, 0));
   check("leaving focus restores every lane", lanes().length === 4, lanes().length);
   const restored = doc.querySelector('.lane[data-lang="te"] .lane-flow');
+  // The reconnect above replaced the backlog, so the Telugu lane now holds the
+  // REPLAYED captions. Asserting the pre-close text here would pass only
+  // because the page failed to apply that history.
   check("restored lane is not blank",
-        restored.textContent.includes("తెలుగు"), restored.textContent.slice(0, 30));
+        restored.textContent.includes("మళ్లీ కనెక్ట్"),
+        restored.textContent.slice(0, 30));
 
   // --- rotation ----------------------------------------------------------
   const { nextLane } = win;
