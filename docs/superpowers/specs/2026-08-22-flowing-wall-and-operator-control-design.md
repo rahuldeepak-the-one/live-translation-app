@@ -299,12 +299,39 @@ with a much shorter timer, and only costs latency when the speaker has in fact
 stopped talking. Whisper's capitalisation corroborates: all 24 continuation
 chunks in that session began lowercase.
 
-**`SENTENCE_GRACE_S` must not be guessed.** The existing transcript records
-neither the cut reason nor the trailing-silence duration, so the threshold cannot
-be derived from it. Step one is instrumentation — have `should_process()` report
-*why* it cut, and log that with the measured trailing-silence duration and the
-gap to the next speech. Replay a service, then choose the value from the
-distribution, the way every other tuned constant in `config.py` was justified.
+**`SENTENCE_GRACE_S` must not be guessed.** The threshold cannot be derived from
+the existing transcript, which records neither the cut reason nor any silence
+duration. Step one is instrumentation — replay a service, then choose the value
+from the distribution, the way every other tuned constant in `config.py` was
+justified.
+
+**Instrumentation shipped 2026-08-23** (`segmentation_log.py`,
+`analyze_segmentation.py`). It is measurement only: no cutting behaviour
+changed, so what it captures describes the system as it actually runs.
+
+A subtlety worth keeping: the obvious measurement is useless. `should_process()`
+fires the instant 0.6s of silence exists, so the silence present *at* a cut is
+always ~0.6–0.9s and cannot separate a breath from a finished thought. The
+discriminator is measured *after* the cut — `speech_gap_s`, how long until
+speech resumes. A record therefore stays open until the next speech arrives.
+
+Each cut writes a `kind: "cut"` row to `transcripts/<date>.jsonl` carrying
+`reason`, `chunk_s`, `trailing_silence_s`, `speech_gap_s`, the raw chunk `text`,
+and `looked_complete`. Rows without `kind` remain utterances.
+
+```
+python analyze_segmentation.py transcripts/<date>.jsonl
+```
+
+grades every cut that was flushed as a sentence ending against whether the next
+chunk begins lowercase — Whisper's capitalisation marks continuations, and all
+24 continuation chunks on 2026-08-21 began lowercase — then prints both
+populations and proposes a value.
+
+**Read its coverage line before trusting the number.** If the populations
+overlap, no threshold separates them, and the honest conclusion is that timing
+alone cannot fix these cuts. That result is not a failure of the exercise; it is
+the finding that would justify the Stage 3 repair pass instead.
 
 Stage 2 makes the flow smooth and `final` honest. Stage 2b makes the boundaries
 correct.
