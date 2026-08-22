@@ -115,6 +115,31 @@ async function run() {
         nextLane(["ml", "te", "hi"], null) === "ml", nextLane(["ml", "te", "hi"], null));
   check("rotation survives the current lane being disabled",
         nextLane(["ml", "hi"], "te") === "ml", nextLane(["ml", "hi"], "te"));
+
+  // --- rotation must not leak timers ------------------------------------
+  // Every `display` message must clear the previous interval before setting a
+  // new one. Without that, each message stacks another timer and the wall
+  // flickers between languages at compounding speed — invisible in a short
+  // test, ruinous over a 90-minute service. Counting calls needs no real ticks:
+  // display.js resolves setInterval from the iframe global at call time.
+  let setCalls = 0, clearCalls = 0;
+  const realSet = win.setInterval, realClear = win.clearInterval;
+  win.setInterval = (...a) => { setCalls++; return realSet.apply(win, a); };
+  win.clearInterval = (...a) => { clearCalls++; return realClear.apply(win, a); };
+
+  ws.deliver(display(["ml", "te", "hi"], null, 20));
+  ws.deliver(display(["ml", "te", "hi"], null, 30));
+  ws.deliver(display(["ml", "te", "hi"], null, 20));
+  check("every rotating display message clears before it sets",
+        clearCalls === 3 && setCalls === 3, `clear=${clearCalls} set=${setCalls}`);
+
+  // Pinning must clear without setting, so a rotation timer cannot survive it.
+  ws.deliver(display(["ml", "te", "hi"], "ml", 0));
+  check("pinning clears the rotation timer and starts no new one",
+        clearCalls === 4 && setCalls === 3, `clear=${clearCalls} set=${setCalls}`);
+
+  win.setInterval = realSet;
+  win.clearInterval = realClear;
 }
 
 finish(run());
