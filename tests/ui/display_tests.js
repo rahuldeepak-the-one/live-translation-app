@@ -1,4 +1,9 @@
-/* The projector wall: independent flowing lanes, one per enabled language. */
+/* The projector wall: one card per enabled target language, English on the
+ * header line, and a trust-marked split between confirmed and in-progress
+ * text. Card-internal behaviour is covered by card_tests.js; this suite is
+ * about the wall — which cards exist, what the operator's controls do to it,
+ * and what must never appear on it.
+ */
 import { check, loadPage, finish } from "/tests/ui/runner.js";
 
 const sentence = (id, en, final = true) => ({ type: "sentence", id, en, final });
@@ -16,90 +21,158 @@ async function run() {
   const ws = win.__sockets[0];
   check("display.js opened a caption socket", !!ws, ws && ws.url);
   if (!ws) return;
+
+  const cards = () => [...doc.querySelectorAll(".card")];
+  const langs = () => cards().map((c) => c.dataset.lang).join(",");
+  const grid = () => doc.getElementById("grid");
+  const cardFor = (lang) => doc.querySelector(`.card[data-lang="${lang}"]`);
+
   ws.onopen();
   ws.deliver({ type: "history", sentences: [] });
   ws.deliver(display(["en", "ml", "te", "hi"]));
 
-  for (let i = 1; i <= 12; i++) {
+  // --- cards are the lanes minus English ---------------------------------
+  // English has its own header line; printing the same sentence twice would
+  // spend wall space a reader at the back needs.
+  check("english does not get a card of its own", langs() === "ml,te,hi", langs());
+  check("the grid is told how many cards it holds",
+        grid().dataset.cards === "3", grid().dataset.cards);
+  // Before the first caption there is nothing to put on the line, and a bare
+  // "English" label against blank space reads as a rendering fault.
+  check("the english header line stays out of the way until there is a caption",
+        doc.getElementById("en-bar").hidden);
+
+  for (let i = 1; i <= 6; i++) {
     ws.deliver(sentence(i, `Projector caption number ${i} is fairly long.`));
     ws.deliver(translation(i));
   }
 
-  const lanes = () => [...doc.querySelectorAll(".lane")];
-  check("one lane per enabled language", lanes().length === 4, lanes().length);
-  check("lanes are labelled by language",
-        lanes().map((l) => l.dataset.lang).join(",") === "en,ml,te,hi",
-        lanes().map((l) => l.dataset.lang).join(","));
+  check("the english header line appears once captions start",
+        !doc.getElementById("en-bar").hidden);
+  check("the malayalam card shows malayalam",
+        cardFor("ml").textContent.includes("മലയാളം വാക്യം"),
+        cardFor("ml").textContent.slice(0, 40));
+  check("the telugu card shows telugu",
+        cardFor("te").textContent.includes("తెలుగు వాక్యం"),
+        cardFor("te").textContent.slice(0, 40));
+  check("the english header line carries the newest english",
+        doc.getElementById("en-text").textContent.includes("number 6"),
+        doc.getElementById("en-text").textContent);
 
-  const mlText = doc.querySelector('.lane[data-lang="ml"] .lane-flow').textContent;
-  check("malayalam lane shows malayalam", mlText.includes("മലയാളം"), mlText.slice(0, 40));
-
-  // Lanes flow: many sentences share one paragraph, not one block each.
-  const mlSpans = doc.querySelectorAll('.lane[data-lang="ml"] .lane-flow span');
-  check("lane is one flowing paragraph of spans", mlSpans.length === 12, mlSpans.length);
-
-  // The span-count check above would still pass even if every span rendered
-  // on its own line (e.g. Flow's container itself being a flex column, which
-  // turns each inline span into a block-level flex item). Prove the lane
-  // actually reads as flowing prose: if multiple sentences share a text line,
-  // their spans share a top offset, so distinct tops must be fewer than spans.
-  const mlTops = new Set([...mlSpans].map((s) => s.getBoundingClientRect().top));
-  check("lane genuinely flows as prose (sentences share lines, not one-per-line)",
-        mlTops.size < mlSpans.length,
-        `distinct tops=${mlTops.size} spans=${mlSpans.length}`);
-
-  // Turning English off must leave three lanes, not a gap.
-  ws.deliver(display(["ml", "te", "hi"]));
-  check("disabling english leaves three lanes", lanes().length === 3, lanes().length);
-  check("english lane is gone",
-        !doc.querySelector('.lane[data-lang="en"]'), "en lane still present");
-
-  // The whole point of a projector: newest text must be visible, and the
-  // container must remain scrollable (common.css:36 documents the trap).
-  // `scrollHeight >= clientHeight` is true by definition (scrollHeight can
-  // never be smaller) and cannot fail; assert real overflow exists instead,
-  // the same shape tests/ui/view_tests.js uses for its `maxScroll` check.
-  for (const lane of lanes()) {
-    const flow = lane.querySelector(".lane-flow");
-    const maxScroll = flow.scrollHeight - flow.clientHeight;
-    check(`lane ${lane.dataset.lang} is not scroll-trapped`, maxScroll > 0,
-          `maxScroll=${maxScroll} scrollHeight=${flow.scrollHeight} clientHeight=${flow.clientHeight}`);
-    check(`lane ${lane.dataset.lang} is pinned to the live edge`,
-          flow.scrollHeight - flow.clientHeight - flow.scrollTop <= 2,
-          `${flow.scrollHeight - flow.clientHeight - flow.scrollTop}px from bottom`);
+  // The header line is one line, always — a wrapping English paragraph up
+  // there competes with the captions it exists to caption.
+  {
+    const enText = doc.getElementById("en-text");
+    const style = win.getComputedStyle(enText);
+    check("the english header line never wraps",
+          style.whiteSpace === "nowrap" && style.textOverflow === "ellipsis",
+          `${style.whiteSpace}/${style.textOverflow}`);
   }
 
-  // A sentence with no translation shows grey English, never "…".
-  ws.deliver(sentence(99, "Just spoken, not yet translated.", false));
-  const teFlow = doc.querySelector('.lane[data-lang="te"] .lane-flow');
-  check("untranslated lane shows english, not an ellipsis",
-        teFlow.textContent.includes("Just spoken") && !teFlow.textContent.includes("…"),
-        teFlow.textContent.slice(-60));
-  const newest = teFlow.querySelector('span[data-sid="99"]');
-  check("unfinalised sentence is marked provisional",
-        newest && newest.classList.contains("provisional"),
-        newest && newest.className);
+  // --- nothing technical may reach the wall ------------------------------
+  // The QR carries the address. An IP or URL printed as text puts a technical
+  // string in front of the whole congregation.
+  {
+    const text = doc.body.textContent;
+    check("no IP address appears on the wall",
+          !/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(text), text.slice(0, 200));
+    check("no URL appears on the wall",
+          !/https?:\/\//.test(text) && !/\/view\b/.test(text), text.slice(0, 200));
+    check("the QR is still there for phones", !!doc.querySelector("img.qr"));
+  }
 
-  // Reconnect must restore lanes, not revert to all four. display.js redials
-  // via setTimeout(connect, 2000), so the new socket only exists after that
-  // timer fires — wait it out (the harness runs under --virtual-time-budget,
-  // so this settles fast rather than costing 2 real seconds).
+  // --- the trust split ----------------------------------------------------
+  ws.deliver(sentence(99, "Just spoken, not yet translated.", false));
+  {
+    const te = cardFor("te");
+    const pending = te.querySelector(".card-pending").textContent;
+    check("a held sentence shows grey english on the pending line",
+          pending.startsWith("Just spoken, not yet translated"), pending);
+    check("the pending line is marked unfinished",
+          pending.endsWith("…"), pending);
+    check("the held sentence is not in the confirmed block",
+          !te.querySelector(".card-confirmed").textContent.includes("Just spoken"),
+          te.querySelector(".card-confirmed").textContent.slice(-60));
+  }
+  ws.deliver(sentence(99, "Just spoken, now finished.", true));
+  ws.deliver(translation(99));
+  {
+    const te = cardFor("te");
+    check("confirming moves the sentence into the confirmed block",
+          te.querySelector(".card-confirmed").textContent.includes("వాక్యం 99"),
+          te.querySelector(".card-confirmed").textContent.slice(-60));
+    check("the pending line clears once the sentence is confirmed",
+          te.querySelector(".card-pending").textContent === "",
+          te.querySelector(".card-pending").textContent);
+  }
+
+  // --- theme --------------------------------------------------------------
+  check("the wall opens light — most services are in a bright hall",
+        doc.documentElement.dataset.theme === "light",
+        doc.documentElement.dataset.theme);
+  {
+    const toggle = doc.getElementById("theme-toggle");
+    check("the theme toggle is reachable by assistive tech",
+          toggle && toggle.hasAttribute("aria-label"),
+          toggle && toggle.getAttribute("aria-label"));
+    toggle.click();
+    check("clicking the toggle switches the wall to dark",
+          doc.documentElement.dataset.theme === "dark",
+          doc.documentElement.dataset.theme);
+    check("the choice is remembered for the next service",
+          win.localStorage.getItem("theme") === "dark",
+          win.localStorage.getItem("theme"));
+    check("the toggle relabels itself for the new state",
+          /light/i.test(toggle.getAttribute("aria-label")),
+          toggle.getAttribute("aria-label"));
+    toggle.click();
+    check("clicking again returns to light",
+          doc.documentElement.dataset.theme === "light",
+          doc.documentElement.dataset.theme);
+  }
+
+  // --- connection is reported honestly ------------------------------------
+  check("a live socket shows LIVE",
+        doc.getElementById("live").dataset.state === "live"
+          && /LIVE/i.test(doc.getElementById("live-label").textContent),
+        doc.getElementById("live-label").textContent);
+
+  // --- the lane set drives the grid ---------------------------------------
+  ws.deliver(display(["ml", "te", "hi"]));
+  check("turning english off leaves the three cards", langs() === "ml,te,hi", langs());
+  check("turning english off hides the header line",
+        doc.getElementById("en-bar").hidden);
+
+  ws.deliver(display(["en", "ml", "te"]));
+  check("two target languages give two cards", langs() === "ml,te", langs());
+  check("the grid follows the count", grid().dataset.cards === "2", grid().dataset.cards);
+
+  // English alone must not blank the wall: it becomes the card, and the header
+  // line steps aside so the same sentence is not printed twice.
+  ws.deliver(display(["en"]));
+  check("english alone becomes the card rather than an empty wall",
+        langs() === "en", langs());
+  check("the header line steps aside when english is the card",
+        doc.getElementById("en-bar").hidden);
+
+  ws.deliver(display(["en", "ml", "te", "hi"]));
+
+  // --- reconnect -----------------------------------------------------------
   ws.onclose();
+  check("a dropped socket says so rather than showing a green LIVE",
+        doc.getElementById("live").dataset.state === "down",
+        doc.getElementById("live").dataset.state);
   await new Promise((r) => win.setTimeout(r, 2100));
   const ws2 = win.__sockets[win.__sockets.length - 1];
-  check("display reconnected", ws2 !== ws, `${win.__sockets.length} sockets`);
+  check("the wall reconnected", ws2 !== ws, `${win.__sockets.length} sockets`);
 
-  // `ws2 !== ws` only proves a new socket object exists. Prove state is
-  // actually RESTORED on it: deliver history (replaying the same backlog a
-  // real server would still have) and a NARROWED lane set on ws2 itself, and
-  // assert the wall renders exactly that — not all four, and not by having
-  // silently kept running on the old (closed) `ws`.
-  // The replayed backlog must be DISTINCT from the pre-close one. It used to be
-  // byte-identical, which made the assertion below unfalsifiable: a page that
-  // ignored the replayed `history` entirely and kept rendering its pre-close
-  // cache still had >= 12 spans and still passed. The content has to be
-  // something only the NEW history could have produced.
-  const reconnectSentences = Array.from({ length: 12 }, (_, i) => {
+  // `ws2 !== ws` only proves a new socket object exists. The replayed backlog
+  // must be DISTINCT from the pre-close one: it used to be byte-identical,
+  // which made the assertion below unfalsifiable — a wall that ignored the
+  // replayed `history` and kept rendering its pre-close cache still had cards
+  // full of spans and still passed. Assert on content only the NEW history
+  // could have produced.
+  const reconnectSentences = Array.from({ length: 6 }, (_, i) => {
     const id = 101 + i;
     return {
       id,
@@ -116,63 +189,50 @@ async function run() {
   ws2.deliver({ type: "history", sentences: reconnectSentences });
   ws2.deliver(display(["ml"]));
   check("reconnect restores the narrowed lane set on the new socket",
-        lanes().length === 1 && lanes()[0].dataset.lang === "ml",
-        lanes().map((l) => l.dataset.lang).join(","));
-
-  const mlAfterReconnect = doc.querySelector('.lane[data-lang="ml"] .lane-flow');
-  const reconnectText = mlAfterReconnect ? mlAfterReconnect.textContent : "";
-  check("reconnect's lane renders the backlog replayed on the NEW socket",
+        langs() === "ml", langs());
+  const reconnectText = cardFor("ml") ? cardFor("ml").textContent : "";
+  check("the restored card renders the backlog replayed on the NEW socket",
         reconnectText.includes("പുനഃസംയോജനം 101")
-        && reconnectText.includes("പുനഃസംയോജനം 112"),
+        && reconnectText.includes("പുനഃസംയോജനം 106"),
         reconnectText.slice(0, 80));
-  // history REPLACES state; a page that appended would still be showing the
-  // pre-close captions underneath, and a reconnect mid-service would then show
-  // the passage twice.
+  // history REPLACES state; a wall that appended would still be showing the
+  // pre-close captions underneath, so a reconnect mid-service would print the
+  // passage twice. Nothing else in this suite covers that.
   check("reconnect history replaces the pre-close cache rather than appending",
         !reconnectText.includes("മലയാളം വാക്യം"),
         reconnectText.slice(0, 80));
 
-  // --- focus -------------------------------------------------------------
+  // --- focus ---------------------------------------------------------------
   ws2.deliver(display(["en", "ml", "te", "hi"], "ml", 0));
-  check("focus renders exactly one lane", lanes().length === 1, lanes().length);
-  check("the focused lane is the requested one",
-        lanes()[0].dataset.lang === "ml", lanes()[0].dataset.lang);
-  check("wall is marked focused",
-        doc.getElementById("wall").classList.contains("focused"), "no .focused");
+  check("focus renders exactly one card", langs() === "ml", langs());
+  check("the focused card fills the wall", grid().dataset.cards === "1", grid().dataset.cards);
+  check("the focused card still holds the backlog",
+        cardFor("ml").querySelectorAll(".card-confirmed span").length > 0,
+        cardFor("ml").querySelectorAll(".card-confirmed span").length);
 
-  const focusedFlow = doc.querySelector('.lane[data-lang="ml"] .lane-flow');
-  check("focused lane still holds the backlog",
-        focusedFlow.querySelectorAll("span").length >= 12,
-        focusedFlow.querySelectorAll("span").length);
-
-  // Leaving focus must restore lanes that are already full, not blank ones.
   ws2.deliver(display(["en", "ml", "te", "hi"], null, 0));
-  check("leaving focus restores every lane", lanes().length === 4, lanes().length);
-  const restored = doc.querySelector('.lane[data-lang="te"] .lane-flow');
-  // The reconnect above replaced the backlog, so the Telugu lane now holds the
-  // REPLAYED captions. Asserting the pre-close text here would pass only
-  // because the page failed to apply that history.
-  check("restored lane is not blank",
-        restored.textContent.includes("మళ్లీ కనెక్ట్"),
-        restored.textContent.slice(0, 30));
+  check("leaving focus restores every card", langs() === "ml,te,hi", langs());
+  // The reconnect above replaced the backlog, so this card now holds the
+  // REPLAYED captions. Asserting the pre-close text would pass only if the
+  // wall had failed to apply that history.
+  check("a restored card is not blank",
+        cardFor("te").textContent.includes("మళ్లీ కనెక్ట్"),
+        cardFor("te").textContent.slice(0, 40));
 
-  // --- rotation ----------------------------------------------------------
+  // --- rotation -------------------------------------------------------------
   const { nextLane } = win;
   check("rotation advances through the lanes",
-        nextLane(["ml", "te", "hi"], "ml") === "te", nextLane(["ml", "te", "hi"], "ml"));
-  check("rotation wraps",
-        nextLane(["ml", "te", "hi"], "hi") === "ml", nextLane(["ml", "te", "hi"], "hi"));
+        nextLane(["ml", "te", "hi"], "ml") === "te");
+  check("rotation wraps", nextLane(["ml", "te", "hi"], "hi") === "ml");
   check("rotation starts at the first lane when nothing is current",
-        nextLane(["ml", "te", "hi"], null) === "ml", nextLane(["ml", "te", "hi"], null));
+        nextLane(["ml", "te", "hi"], null) === "ml");
   check("rotation survives the current lane being disabled",
-        nextLane(["ml", "hi"], "te") === "ml", nextLane(["ml", "hi"], "te"));
+        nextLane(["ml", "hi"], "te") === "ml");
 
-  // --- rotation must not leak timers ------------------------------------
   // Every `display` message must clear the previous interval before setting a
-  // new one. Without that, each message stacks another timer and the wall
-  // flickers between languages at compounding speed — invisible in a short
-  // test, ruinous over a 90-minute service. Counting calls needs no real ticks:
-  // display.js resolves setInterval from the iframe global at call time.
+  // new one. Without that each message stacks another timer and the wall
+  // flickers at compounding speed — invisible in a short test, ruinous over a
+  // 90-minute service.
   let setCalls = 0, clearCalls = 0;
   const realSet = win.setInterval, realClear = win.clearInterval;
   win.setInterval = (...a) => { setCalls++; return realSet.apply(win, a); };
@@ -184,7 +244,6 @@ async function run() {
   check("every rotating display message clears before it sets",
         clearCalls === 3 && setCalls === 3, `clear=${clearCalls} set=${setCalls}`);
 
-  // Pinning must clear without setting, so a rotation timer cannot survive it.
   ws2.deliver(display(["ml", "te", "hi"], "ml", 0));
   check("pinning clears the rotation timer and starts no new one",
         clearCalls === 4 && setCalls === 3, `clear=${clearCalls} set=${setCalls}`);
@@ -192,24 +251,19 @@ async function run() {
   win.setInterval = realSet;
   win.clearInterval = realClear;
 
-  // --- a rotation tick must actually move the wall -----------------------
-  // nextLane is covered above as a pure function, but nothing verified the
-  // setInterval callback wires it to the DOM. A broken callback leaves all four
-  // nextLane checks green while the wall silently never rotates. Capturing the
-  // callback and calling it is synchronous, so no real timer is needed.
+  // A tick must actually repaint the wall. nextLane being right proves nothing
+  // about the interval callback being wired to the DOM.
   let tick = null;
   const savedSet = win.setInterval;
   win.setInterval = (fn, ms) => { tick = fn; return savedSet.apply(win, [fn, ms]); };
 
   ws2.deliver(display(["ml", "te", "hi"], null, 20));
-  check("rotating shows exactly one lane",
-        doc.querySelectorAll(".lane").length === 1,
-        doc.querySelectorAll(".lane").length);
+  check("rotating shows exactly one card", cards().length === 1, cards().length);
   check("a rotating display message installed a tick callback", typeof tick === "function");
 
   const seen = [];
   for (let i = 0; i < 4; i++) {
-    seen.push(doc.querySelector(".lane").dataset.lang);
+    seen.push(cards()[0].dataset.lang);
     tick();
   }
   check("each rotation tick advances the wall to a different language",
@@ -222,14 +276,12 @@ async function run() {
 
   win.setInterval = savedSet;
 
-  // --- an utterance published during registration must not be lost -------
-  // hub.py adds a client to _clients BEFORE awaiting the history send (see
-  // hub.py:21-22 and tests/test_hub.py's pinned ordering test), so a
-  // `sentence` can legitimately arrive on THIS connection before its own
-  // `history` snapshot. display.js must buffer such events and replay them
-  // on top of history, exactly like view.js already does — otherwise the
-  // empty history that follows wipes every lane's cache and the utterance
-  // vanishes from the wall while /view still shows it.
+  // --- an utterance published during registration must not be lost ---------
+  // hub.py adds a client to _clients BEFORE awaiting the history send, so a
+  // `sentence` can legitimately arrive on this connection before its own
+  // `history` snapshot. Without buffering, the empty history that follows
+  // wipes the cache and the utterance vanishes from the wall while /view
+  // still shows it.
   {
     const { win: freshWin, doc: freshDoc } = await loadPage("/display", { width: 1280, height: 720 });
     const freshWs = freshWin.__sockets[0];
@@ -239,20 +291,17 @@ async function run() {
       freshWs.deliver(sentence(99, "Mid-join utterance.", true));
       freshWs.deliver({ type: "history", sentences: [] });
       freshWs.deliver(display(["en", "ml", "te", "hi"]));
-      const enFlow = freshDoc.querySelector('.lane[data-lang="en"] .lane-flow');
+      const te = freshDoc.querySelector('.card[data-lang="te"]');
       check("an utterance published during registration survives history replay",
-            enFlow && enFlow.textContent.includes("Mid-join utterance."),
-            enFlow && enFlow.textContent.trim().slice(-60));
+            te && te.textContent.includes("Mid-join utterance."),
+            te && te.textContent.trim().slice(-60));
     }
   }
 
-  // A fresh /display load mid-service is the common case this guards: the
-  // page's own module-load renderLanes() already built the default four
-  // lanes before any socket message arrives, so when `history` arrives with
-  // a non-empty backlog and the lane SET is unchanged, renderLanes() takes
-  // its "nothing structural changed" early return — the per-flow reset right
-  // after it is what actually loads the backlog into the (already-built,
-  // still-empty) lanes.
+  // A fresh /display load mid-service: the page's own module-load render has
+  // already built the default cards before any socket message arrives, so when
+  // `history` lands with a backlog and the lane SET is unchanged, the rebuild
+  // early-returns and the per-card repaint after it is what loads the backlog.
   {
     const { win: backlogWin, doc: backlogDoc } = await loadPage("/display", { width: 1280, height: 720 });
     const backlogWs = backlogWin.__sockets[0];
@@ -261,14 +310,66 @@ async function run() {
       backlogWs.onopen();
       backlogWs.deliver({
         type: "history",
-        sentences: [{ id: 1, en: "Pre-existing backlog sentence.", translations: null, final: true }],
+        sentences: [{
+          id: 1, en: "Pre-existing backlog sentence.",
+          translations: { ml: "പഴയത്.", te: "పాతది.", hi: "पुराना।" }, final: true,
+        }],
       });
       backlogWs.deliver(display(["en", "ml", "te", "hi"]));
-      const enFlow = backlogDoc.querySelector('.lane[data-lang="en"] .lane-flow');
-      check("a fresh connection's non-empty history renders even when the lane set is unchanged",
-            enFlow && enFlow.textContent.includes("Pre-existing backlog sentence."),
-            enFlow && enFlow.textContent.trim().slice(-60));
+      const te = backlogDoc.querySelector('.card[data-lang="te"]');
+      check("a fresh connection's non-empty history renders even when the card set is unchanged",
+            te && te.textContent.includes("పాతది."),
+            te && te.textContent.trim().slice(-60));
     }
+  }
+
+  // --- legibility of the live line -----------------------------------------
+  // The pending line IS the live translation — the one a reader at the back is
+  // following. It is deliberately subordinate to the confirmed text because it
+  // may still change, but subordinate is not the same as invisible: the light
+  // theme shipped at 1.98:1, below even the AA-large floor, on the default
+  // theme, on a projector, in a hall chosen bright enough to need light mode.
+  // Projector text is large, so 3:1 (AA-large) is the right bar.
+  {
+    const rel = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    const lum = ([r, g, b]) => 0.2126 * rel(r) + 0.7152 * rel(g) + 0.0722 * rel(b);
+    const parse = (v) => v.match(/[\d.]+/g).slice(0, 3).map(Number);
+    const ratio = (fg, bg) => {
+      const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const root = doc.documentElement;
+    // A probe element, not getPropertyValue: a custom property returns its
+    // literal token text ("#fbfcfd"), whereas `color` on a real element is
+    // resolved to rgb() — which is also what actually renders.
+    const probe = doc.createElement("span");
+    probe.style.display = "none";
+    doc.body.appendChild(probe);
+    const resolved = (token) => {
+      probe.style.color = `var(${token})`;
+      return parse(doc.defaultView.getComputedStyle(probe).color);
+    };
+    const measure = () => {
+      const bg = resolved("--card-bg");
+      return {
+        pending: ratio(resolved("--text-pending"), bg),
+        confirmed: ratio(resolved("--text-confirmed"), bg),
+      };
+    };
+    for (const theme of ["light", "dark"]) {
+      root.dataset.theme = theme;
+      const { pending, confirmed } = measure();
+      check(`${theme}: the live (pending) line clears the AA-large floor`,
+            pending >= 3.0, `${pending.toFixed(2)}:1`);
+      check(`${theme}: confirmed text is comfortably readable`,
+            confirmed >= 4.5, `${confirmed.toFixed(2)}:1`);
+      // Still subordinate — the trust marking is meaningless if they match.
+      check(`${theme}: pending stays visibly subordinate to confirmed`,
+            pending < confirmed / 2,
+            `pending ${pending.toFixed(2)} vs confirmed ${confirmed.toFixed(2)}`);
+    }
+    probe.remove();
+    root.dataset.theme = "light";
   }
 }
 

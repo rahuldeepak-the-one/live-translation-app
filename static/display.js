@@ -1,48 +1,89 @@
-/* Projector wall: independent flowing lanes, one per enabled language.
+/* Projector wall: one card per enabled target language.
  *
- * Lanes are rebuilt only when the SET of languages changes. A caption arriving
- * never rebuilds anything — it is handed to each lane's Flow, which revises in
- * place. Rebuilding on every caption would reset every lane's scroll position.
+ * Cards are rebuilt only when the SET of visible languages changes. A caption
+ * arriving never rebuilds anything — it is handed to each card, which revises
+ * in place. Rebuilding per caption would restart every card's fade and throw
+ * away the append-only guarantee readers depend on.
+ *
+ * English is not a card. It has the header line, and printing the same
+ * sentence twice would spend wall space a reader at the back needs.
  */
-import { Flow } from "/static/flow.js";
+import { LanguageCard, createCard } from "/static/card.js";
+import { initTheme, toggleTheme } from "/static/theme.js";
 
-const MAX_SENTENCES = 400;        // per lane; bounds the DOM over a long service
-const LANG_TAGS = { en: "EN", ml: "ML", te: "TE", hi: "HI" };
+const MAX_SENTENCES = 400;        // bounds the cache over a long service
+
+// Native script, because the person who needs the label cannot read the other
+// three. English only ever labels the degenerate single-card case below.
+const LANG_LABELS = { en: "English", te: "తెలుగు", ml: "മലയാളം", hi: "हिन्दी" };
 
 const state = {
   display: { lanes: ["en", "ml", "te", "hi"], focus: null, rotate: 0 },
   sentences: new Map(),           // id -> {id, en, translations, final}
   order: [],
 };
-const flows = new Map();          // lang -> Flow (built against .lane-text)
-const scrollers = new Map();      // lang -> .lane-flow element (the scroll container)
+const cards = new Map();          // lang -> LanguageCard
 
 const els = {
-  wall: document.getElementById("wall"),
-  empty: document.getElementById("empty"),
-  dot: document.getElementById("status-dot"),
-  statusText: document.getElementById("status-text"),
-  viewUrl: document.getElementById("view-url"),
+  grid: document.getElementById("grid"),
+  live: document.getElementById("live"),
+  liveLabel: document.getElementById("live-label"),
+  enBar: document.getElementById("en-bar"),
+  enText: document.getElementById("en-text"),
+  themeToggle: document.getElementById("theme-toggle"),
 };
-els.viewUrl.textContent = `http://${window.location.host}/view`;
 
-/* ------------------------------------------------------------------- lanes */
+/* ------------------------------------------------------------------ theme */
 
-// rotationLane/rotationTimer must be declared before visibleLanes() — it
-// reads rotationLane, and renderLanes() (which calls visibleLanes()) runs at
-// module load, below. A `let` declared after that first call would still be
-// in its temporal dead zone and throw a ReferenceError.
+initTheme(window);
+labelToggle();
+
+function labelToggle() {
+  const dark = document.documentElement.dataset.theme === "dark";
+  els.themeToggle.setAttribute(
+    "aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+}
+
+els.themeToggle.addEventListener("click", () => {
+  toggleTheme(window);
+  labelToggle();
+});
+
+/* ------------------------------------------------------------------ cards */
+
+// rotationLane/rotationTimer must be declared before visibleLanes() — it reads
+// rotationLane, and renderCards() (which calls visibleLanes()) runs at module
+// load, below. A `let` declared after that first call would still be in its
+// temporal dead zone and throw a ReferenceError.
 let rotationLane = null;
 let rotationTimer = null;
 
-/* Which lanes to paint right now. Focus and rotation are mutually exclusive
-   modes — see the spec's state model. Rotation is advanced by THIS page on its
-   own timer, so the server needs no timer and broadcasts nothing per step. */
+/* Which lanes the operator is asking for right now. Focus and rotation are
+   mutually exclusive modes; rotation is advanced by THIS page on its own
+   timer, so the server needs no timer and broadcasts nothing per step. */
 function visibleLanes() {
   const { lanes, focus, rotate } = state.display;
-  if (rotate > 0) return [rotationLane];
+  if (rotate > 0) return rotationLane ? [rotationLane] : [];
   if (focus && lanes.includes(focus)) return [focus];
   return lanes;
+}
+
+/* The cards to paint: the visible lanes minus English.
+ *
+ * If that leaves nothing — the operator pinned English, or rotation landed on
+ * it — English becomes the card rather than the wall going blank. */
+function cardLangs() {
+  const targets = visibleLanes().filter((l) => l && l !== "en");
+  return targets.length ? targets : ["en"];
+}
+
+/* The header line duplicates an English card, so it yields to one — and it
+   stays out of the way until there is a sentence to put on it, rather than
+   showing a bare "English" label against nothing. */
+function enBarVisible() {
+  return state.display.lanes.includes("en")
+    && !cardLangs().includes("en")
+    && state.order.length > 0;
 }
 
 /* Exported onto window for the browser suite; pure, so it is worth testing. */
@@ -66,66 +107,50 @@ function applyRotation() {
   if (!lanes.includes(rotationLane)) rotationLane = nextLane(lanes, null);
   rotationTimer = setInterval(() => {
     rotationLane = nextLane(state.display.lanes, rotationLane);
-    renderLanes();
+    renderCards();
+    paintCards();
   }, rotate * 1000);
 }
 
-// Returns whether it actually rebuilt the DOM (false when the wanted lane SET
-// already matches what's built). The history handler needs to know: when this
-// returns true, every flow it now holds was just freshly built FROM the
-// current cache (see the `flow.reset()` a few lines down), so re-resetting
-// them again right after would be pure repeated work.
-function renderLanes() {
-  const wanted = visibleLanes();
-  // Set before the early return so the class tracks the mode (focused vs.
-  // not) even on ticks where the visible lane SET happens not to change.
-  els.wall.classList.toggle("focused", wanted.length === 1);
-  const current = [...flows.keys()];
-  if (current.join(",") === wanted.join(",")) return false;   // nothing structural changed
+/* Returns whether it actually rebuilt the DOM. The history handler needs to
+   know: when this returns true every card it now holds was just built and
+   painted from the current cache, so painting again would be repeated work. */
+function renderCards() {
+  const wanted = cardLangs();
+  els.grid.dataset.cards = String(wanted.length);
+  els.enBar.hidden = !enBarVisible();
 
-  els.wall.textContent = "";
-  flows.clear();
-  scrollers.clear();
+  const current = [...cards.keys()];
+  if (current.join(",") === wanted.join(",")) return false;
+
+  els.grid.textContent = "";
+  cards.clear();
   for (const lang of wanted) {
-    const lane = document.createElement("div");
-    lane.className = "lane";
-    lane.dataset.lang = lang;
-
-    const tag = document.createElement("span");
-    tag.className = "lane-tag";
-    tag.textContent = LANG_TAGS[lang] || lang.toUpperCase();
-
-    // Two levels, deliberately: .lane-flow is the scroll container; .lane-text
-    // is a plain block paragraph holding Flow's inline spans. See common.css
-    // for why Flow must never be constructed against the flex-column scroll
-    // container directly.
-    const flowEl = document.createElement("div");
-    flowEl.className = "lane-flow";
-
-    const textEl = document.createElement("p");
-    textEl.className = "lane-text";
-    flowEl.appendChild(textEl);
-
-    lane.append(tag, flowEl);
-    els.wall.appendChild(lane);
-
-    const flow = new Flow(textEl, lang);
-    flow.reset(state.order.map((id) => state.sentences.get(id)));
-    flow.trim(MAX_SENTENCES);
-    flows.set(lang, flow);
-    scrollers.set(lang, flowEl);
+    const section = createCard(document, lang, LANG_LABELS[lang] || lang);
+    els.grid.appendChild(section);
+    cards.set(lang, new LanguageCard(section, lang));
   }
-  // Scroll only after every lane exists in the DOM. Each .lane shares equal
-  // height with its siblings (flex: 1 inside .wall's flex column), so a lane
-  // scrolled while it is still the only child measures a taller-than-final
-  // clientHeight; once its later siblings are appended that height shrinks
-  // and the earlier scrollTop falls short of the live edge.
-  for (const flowEl of scrollers.values()) scrollLaneToLive(flowEl);
+  paintCards();
   return true;
 }
 
-function scrollLaneToLive(flowEl) {
-  flowEl.scrollTop = flowEl.scrollHeight;
+function rows() {
+  return state.order.map((id) => state.sentences.get(id));
+}
+
+function paintCards() {
+  const all = rows();
+  for (const card of cards.values()) card.render(all);
+  paintEnBar(all);
+}
+
+function paintEnBar(all) {
+  const newest = all[all.length - 1];
+  els.enText.textContent = newest ? newest.en : "";
+  // Also set here, not only in renderCards(): the first caption of a service
+  // does not change the card SET, so renderCards() early-returns and this is
+  // the only place that learns the line now has something to show.
+  els.enBar.hidden = !enBarVisible();
 }
 
 /* -------------------------------------------------------------- captions */
@@ -145,16 +170,12 @@ function remember(s) {
   return row;
 }
 
-function applyToLanes(row) {
-  for (const [lang, flow] of flows) {
-    flow.apply(row);
-    flow.trim(MAX_SENTENCES);
-    scrollLaneToLive(scrollers.get(lang));
-  }
-  els.empty.style.display = state.order.length ? "none" : "";
-}
-
 /* ------------------------------------------------------------- connection */
+
+function setLive(live, label) {
+  els.live.dataset.state = live ? "live" : "down";
+  els.liveLabel.textContent = label;
+}
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -165,15 +186,12 @@ function connect() {
   // awaiting the history send, so a `sentence`/`translation` can legitimately
   // arrive first. Mirrors view.js's connSentences/connTranslations — without
   // this, that utterance paints once and then vanishes the instant history
-  // (which never saw it) arrives and wipes every lane's cache.
+  // (which never saw it) arrives and wipes the cache.
   const connSentences = [];
   const connTranslations = [];
   let gotHistory = false;
 
-  ws.onopen = () => {
-    els.dot.classList.add("connected");
-    els.statusText.textContent = "live";
-  };
+  ws.onopen = () => setLive(true, "LIVE");
 
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
@@ -185,40 +203,38 @@ function connect() {
       connTranslations.forEach(([id, translations]) => remember({ id, translations }));
       gotHistory = true;
       // `history` is a full-snapshot event (registration replay, or a fresh
-      // reconnect where stale pre-reconnect state must be discarded), so
-      // every existing flow needs to be brought up to date with the cache
-      // just rebuilt above — UNLESS renderLanes() just rebuilt them from
-      // that same cache already (the common case: the lane SET happens not
-      // to have changed, so it early-returns and these flows are stale).
-      // Resetting freshly-built flows again here would be pure repeated work.
-      if (!renderLanes()) {
-        for (const [lang, flow] of flows) {
-          flow.reset(state.order.map((id) => state.sentences.get(id)));
-          scrollLaneToLive(scrollers.get(lang));
-        }
-      }
-      els.empty.style.display = state.order.length ? "none" : "";
+      // reconnect where stale state must be discarded), so every card needs
+      // bringing up to date with the cache just rebuilt above — UNLESS
+      // renderCards() just built and painted them from that same cache. The
+      // common case is a fresh load mid-service, where the card SET happens
+      // not to have changed, so it early-returns and the cards are stale.
+      if (!renderCards()) paintCards();
     } else if (msg.type === "display") {
       const { type, ...display } = msg;
       state.display = display;
       applyRotation();
-      renderLanes();
+      renderCards();
+      paintCards();
     } else if (msg.type === "sentence") {
       if (!gotHistory) connSentences.push({ id: msg.id, en: msg.en, final: msg.final });
-      applyToLanes(remember({ id: msg.id, en: msg.en, final: msg.final }));
+      remember({ id: msg.id, en: msg.en, final: msg.final });
+      paintCards();
     } else if (msg.type === "translation") {
       const { type, id, ...translations } = msg;
       if (!gotHistory) connTranslations.push([id, translations]);
-      applyToLanes(remember({ id, translations }));
+      remember({ id, translations });
+      paintCards();
     }
   };
 
+  // "RECONNECTING", not a green LIVE over a dead socket: the operator needs to
+  // know the wall has stopped updating, and at 13px letter-spaced this reads
+  // as a status light rather than as text competing with the captions.
   ws.onclose = () => {
-    els.dot.classList.remove("connected");
-    els.statusText.textContent = "reconnecting…";
+    setLive(false, "RECONNECTING");
     setTimeout(connect, 2000);
   };
 }
 
-renderLanes();
+renderCards();
 connect();

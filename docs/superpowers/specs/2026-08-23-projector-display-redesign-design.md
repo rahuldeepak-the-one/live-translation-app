@@ -67,9 +67,15 @@ sentence age.
 
 Separately, `pipeline.py:132-134` computes `held_for` immediately after
 `touched = self._clock()`, so it is always ~0 and the
-`held_for >= MAX_SENTENCE_HOLD_S` disjunct can never fire. That dead branch is
-removed. No behaviour change; the flush rule already reads
-`looks_complete(joined) or len(joined) >= MAX_PENDING_CHARS`.
+`held_for >= MAX_SENTENCE_HOLD_S` disjunct can never fire.
+
+**Deferred, not done.** Removing that dead branch was in scope and was
+implemented, but a second session is concurrently working the same file
+(`87d3c2a`, "instrument sentence cuts so the grace threshold can be measured")
+and reverted it. It is a tidy-up with no behaviour change, so it was dropped
+rather than contested; this redesign is now purely presentation-layer and the
+two sessions' file sets are disjoint. The finding stands for whoever owns
+`pipeline.py` next.
 
 ### 5. Fonts are loaded locally, not from Google Fonts
 
@@ -239,7 +245,10 @@ not caption content, and unaffected by `--card-scale`.
   operator signal, not congregation-facing text, and it stays honest rather
   than showing a green `LIVE` on a dead socket.
 - English line: the newest sentence's English, `white-space: nowrap` with
-  ellipsis, shown only when `en ∈ lanes`.
+  ellipsis, shown only when `en ∈ lanes` **and** at least one sentence has
+  arrived — a bare "English" label against blank space reads as a rendering
+  fault. `.wall-header` carries a `min-height` so the cards do not shift down
+  when the line appears with the service's first caption.
 - Theme toggle: 28px sun/moon icon button, far right, with an `aria-label`.
 - Footer: `Scan for phone captions` + `<img src="/qr.svg">` at 58×58. The
   existing `#view-url` element is removed entirely — no IP, URL, or server
@@ -306,5 +315,12 @@ Behaviour to cover:
 - Focus, rotation, the clear-before-set timer discipline, history replay and
   the registration race carry over from the existing suite.
 
-Python side: the existing `pytest` suite must stay green, in particular
-`tests/test_pipeline.py` across the `held_for` removal.
+Python side: the existing `pytest` suite must stay green. With the
+`pipeline.py` change deferred, no Python source is touched at all; only
+`tests/ui/test_view_ui.py` changes, to register the two new suites.
+
+`tests/ui/runner.js` gains a watchdog. A suite that hangs on an await that
+never settles used to leave the results block empty, which surfaced as an
+opaque JSON parse error naming no check; it now reports how far it got. This
+was not speculative — the `card` suite hit it, and the watchdog is what
+located the cause.

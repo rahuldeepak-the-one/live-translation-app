@@ -90,9 +90,24 @@ export async function loadPage(path, { width = 390, height = 720 } = {}) {
 }
 
 export function finish(promise) {
+  const write = () =>
+    (document.getElementById("__results").textContent = JSON.stringify(results, null, 1));
+
+  // A suite that HANGS — an await that never settles — otherwise leaves the
+  // results block empty, and the pytest side reports an opaque JSON parse
+  // error naming no check at all. Write whatever ran, so the last check in the
+  // list points at the line that hung. The budget is virtual time, so this
+  // costs no wall clock; it must stay under --virtual-time-budget.
+  const watchdog = setTimeout(() => {
+    check("suite finished without hanging", false,
+          `timed out after ${results.length} checks`);
+    write();
+  }, 5000);
+
   return promise
     .catch((err) => check("suite ran without throwing", false, err && (err.stack || err.message)))
     .finally(() => {
-      document.getElementById("__results").textContent = JSON.stringify(results, null, 1);
+      clearTimeout(watchdog);
+      write();
     });
 }
