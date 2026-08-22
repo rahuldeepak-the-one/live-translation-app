@@ -55,6 +55,21 @@ def control_token():
     return _CONTROL_TOKEN
 
 
+def _token_matches(candidate):
+    """Constant-time token check, tolerant of anything a client can send.
+
+    One helper for both the /control route and the caption socket, because the
+    encoding detail below is easy to get right in one place and wrong in the
+    other: compare_digest raises TypeError on a non-ASCII str, so comparing raw
+    input turned `/control/café` into a 500 that advertised the route existed.
+    Encoding both sides makes every wrong guess fail identically. `None` covers
+    a socket that simply omitted the query param.
+    """
+    if candidate is None:
+        return False
+    return secrets.compare_digest(candidate.encode(), _CONTROL_TOKEN.encode())
+
+
 def _fallback_view_url():
     """Used when the Host header is missing or malformed."""
     urls = local_urls(PORT)
@@ -141,8 +156,22 @@ def create_app(stt=None, translator=None, transcript=None):
     @app.websocket("/ws/captions")
     async def ws_captions(ws: WebSocket):
         await ws.accept()
+        # Reading is open; WRITING needs the token. Every screen on the church
+        # WiFi holds one of these sockets — the /view address is QR-coded for
+        # the whole congregation — so without this check any phone with a JS
+        # console could reconfigure the projector. The secret /control path
+        # guards the control PAGE; this guards the control CHANNEL, which is
+        # the half that actually changes the wall.
+        #
+        # Unauthenticated sockets still connect and still receive everything.
+        # A screen must never be refused: a caption feed that drops because a
+        # token was mistyped is a worse failure than an unlocked wall.
+        may_control = _token_matches(ws.query_params.get("t"))
         await hub.register(ws)
-        logger.info("Screen connected (%d total).", len(hub._clients))
+        logger.info(
+            "Screen connected (%d total, %s).",
+            len(hub._clients), "operator" if may_control else "read-only",
+        )
         try:
             while True:
                 # Screens are read-only; only /control sends anything, and it
@@ -153,6 +182,13 @@ def create_app(stt=None, translator=None, transcript=None):
                 except json.JSONDecodeError:
                     continue
                 if not isinstance(msg, dict) or msg.get("type") != "display":
+                    continue
+                if not may_control:
+                    # Logged, not ignored silently: if the wall does something
+                    # odd mid-service this is how you tell an operator from a
+                    # congregant experimenting with the developer console.
+                    logger.warning(
+                        "Ignored control state from an unauthenticated socket: %r", msg)
                     continue
                 try:
                     await hub.publish_display(msg)
@@ -187,12 +223,10 @@ def create_app(stt=None, translator=None, transcript=None):
 
     @app.get("/control/{token}")
     async def control_page(token: str):
-        # compare_digest, and an identical 404 either way: a wrong token must be
-        # indistinguishable from a path that was never a page, so the endpoint
-        # cannot be probed. compare_digest requires ASCII-only str (it raises
-        # TypeError otherwise) — encode both sides so a non-ASCII token 404s
-        # like any other wrong guess instead of 500ing and logging a traceback.
-        if not secrets.compare_digest(token.encode(), _CONTROL_TOKEN.encode()):
+        # An identical 404 either way: a wrong token must be indistinguishable
+        # from a path that was never a page, so the endpoint cannot be probed.
+        # See _token_matches for why the comparison encodes both sides.
+        if not _token_matches(token):
             raise HTTPException(status_code=404)
         return FileResponse(STATIC_DIR / "control.html")
 

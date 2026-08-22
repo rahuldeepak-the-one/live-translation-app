@@ -186,3 +186,56 @@ def test_control_token_is_not_guessable_from_the_public_pages():
     token = server_module.control_token()
     for path in ("/display", "/view", "/qr.svg"):
         assert token not in client.get(path).text
+
+
+def _wall_lanes(client, sender_query=""):
+    """Open a caption socket, try to narrow the wall to ml, report what stuck.
+
+    Uses a second, read-only socket as the observer, because the retained state
+    the hub replays on connect is the wall's real state — not whatever the
+    sender hoped for.
+    """
+    with client.websocket_connect(f"/ws/captions{sender_query}") as sender:
+        sender.receive_json()          # history
+        sender.receive_json()          # display
+        sender.send_json({"type": "display", "lanes": ["ml"],
+                          "focus": None, "rotate": 0})
+        # A second connection forces the server to replay whatever it retained.
+        with client.websocket_connect("/ws/captions") as observer:
+            observer.receive_json()    # history
+            return observer.receive_json()["lanes"]
+
+
+def test_socket_without_the_token_cannot_change_the_wall():
+    # Every phone on the church WiFi holds one of these sockets — /view is
+    # QR-coded for the whole congregation — so an unauthenticated socket must
+    # not be able to reconfigure the projector from a developer console.
+    client = make_client()
+    assert _wall_lanes(client) == ["en", "ml", "te", "hi"]
+
+
+def test_socket_with_the_token_can_change_the_wall():
+    client = make_client()
+    token = server_module.control_token()
+    assert _wall_lanes(client, f"?t={token}") == ["ml"]
+
+
+def test_socket_with_a_wrong_token_cannot_change_the_wall():
+    client = make_client()
+    assert _wall_lanes(client, "?t=definitely-not-the-token") == ["en", "ml", "te", "hi"]
+
+
+def test_socket_with_a_non_ascii_token_is_rejected_not_crashed():
+    # Same TypeError trap as the /control route: compare_digest refuses a
+    # non-ASCII str, and an exception here would tear down the caption feed.
+    client = make_client()
+    assert _wall_lanes(client, "?t=caf%C3%A9") == ["en", "ml", "te", "hi"]
+
+
+def test_unauthenticated_socket_still_receives_captions():
+    # Reading stays open. A screen must never be refused for lacking a token —
+    # a caption feed that dies on a mistyped token is worse than an open wall.
+    client = make_client()
+    with client.websocket_connect("/ws/captions") as screen:
+        assert screen.receive_json()["type"] == "history"
+        assert screen.receive_json()["type"] == "display"

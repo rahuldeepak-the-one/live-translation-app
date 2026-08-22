@@ -216,9 +216,28 @@ every other path under `/control` returns 404, identically, so the endpoint
 cannot be probed. The QR code in the `/display` footer continues to encode
 `/view` only.
 
-This is obscurity, not authentication, and the spec says so plainly: it defends
-against a bored teenager on the church WiFi, which is the actual threat. It does
-not defend against anyone who can read the operator's screen or the server log.
+The secret path is obscurity, not authentication: it hides the control *page*
+from someone guessing at URLs. It does not defend against anyone who can read
+the operator's screen or the server log.
+
+**The channel is authenticated separately, and that is the half that matters.**
+Amended 2026-08-23, after the final review demonstrated the gap: every screen on
+the church WiFi holds an open `/ws/captions`, and `/view` is QR-coded for the
+whole congregation, so any phone with a developer console could send a `display`
+message and reconfigure the projector without ever knowing the path.
+
+`/ws/captions` therefore splits reading from writing:
+
+```
+/ws/captions            connect, receive everything — no token needed
+/ws/captions?t=<token>  may additionally SEND `display`
+```
+
+An inbound `display` on an unauthenticated socket is logged with the offending
+payload and ignored. Reading stays open on purpose: a screen must never be
+refused, because a caption feed that dies over a mistyped token is a worse
+failure than an unlocked wall. `/control` supplies the token from its own path,
+so nothing extra has to be embedded in a page.
 
 ### Config
 
@@ -354,7 +373,9 @@ while its predecessors go final.
 
 ## Out of scope
 
-- Authentication proper. The control path is obscurity by explicit decision.
+- User accounts, sessions, or TLS. The control *channel* is authenticated by a
+  shared per-run token (see Protocol above); the control *path* remains
+  obscurity. Both travel in the clear on the venue LAN, which is accepted.
 - Per-viewer lane choice on `/display`. The wall is one shared surface; personal
   choice is what `/view` is for.
 - Changing `/view`'s behaviour beyond adopting the shared renderer.

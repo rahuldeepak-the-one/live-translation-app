@@ -77,9 +77,20 @@ els.focus.addEventListener("click", (ev) => {
 els.rotateOn.addEventListener("click", () => send({ ...wall, focus: null, rotate: ROTATE_S }));
 els.rotateOff.addEventListener("click", () => send({ ...wall, rotate: 0 }));
 
+/* This page is served at /control/<token>, so it already holds the one secret
+   it needs — no need to embed it separately, which would risk it reaching a
+   page the congregation can load. The socket carries it because reading the
+   caption feed is open to every screen but CHANGING the wall is not. Empty on
+   the test harness, which serves /control with no token and stubs the socket. */
+function controlToken() {
+  return location.pathname.split("/").filter(Boolean)[1] || "";
+}
+
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  socket = new WebSocket(`${proto}//${location.host}/ws/captions`);
+  const t = controlToken();
+  socket = new WebSocket(
+    `${proto}//${location.host}/ws/captions${t ? `?t=${encodeURIComponent(t)}` : ""}`);
 
   socket.onopen = () => {
     els.dot.classList.add("connected");
