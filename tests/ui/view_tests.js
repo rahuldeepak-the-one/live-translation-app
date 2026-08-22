@@ -101,6 +101,34 @@ async function run() {
         brightness(spanFor(300)) < brightness(spanFor(100)) - 20,
         `awaiting=${brightness(spanFor(300)).toFixed(0)} translated=${brightness(spanFor(100)).toFixed(0)}`);
 
+  // --- unknown id guard ----------------------------------------------------
+  // A translation can legitimately arrive for an id this Flow has never seen
+  // (e.g. /display builds a Flow fresh per lane). It must be a no-op, not a
+  // phantom row painting the literal string "undefined" into the lane.
+  // No language keys at all, so whichever language is selected finds nothing
+  // to show and would fall back to the (missing) English — reproducing the
+  // defect regardless of the current picker state.
+  ws.deliver({ type: "translation", id: 999 });
+  check("translation for an unseen id does not create a span", !spanFor(999));
+  check("translation for an unseen id does not paint literal 'undefined'",
+        !$("#transcript").textContent.includes("undefined"),
+        $("#transcript").textContent.slice(-80));
+
+  // --- provisional / final ------------------------------------------------
+  // `final` drives `.provisional` independently of `.awaiting` — see the CSS
+  // comment in view.html distinguishing the two.
+  ws.deliver({ type: "sentence", id: 400, en: "Speaker is still mid-sentence.", final: false });
+  check("final:false marks the span provisional",
+        spanFor(400) && spanFor(400).classList.contains("provisional"));
+
+  ws.deliver({ type: "sentence", id: 400, en: "Speaker is still mid-sentence.", final: true });
+  check("final:true clears the provisional class",
+        spanFor(400) && !spanFor(400).classList.contains("provisional"));
+
+  ws.deliver({ type: "sentence", id: 401, en: "No final flag was sent at all." });
+  check("a sentence with no final flag is not marked provisional",
+        spanFor(401) && !spanFor(401).classList.contains("provisional"));
+
   // --- controls ----------------------------------------------------------
   const bigger = doc.getElementById("text-bigger");
   check("text size control exists", !!bigger);

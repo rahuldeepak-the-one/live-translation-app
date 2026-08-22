@@ -38,6 +38,11 @@ export class Flow {
       this._paint(existing);
       return;
     }
+    // A translation for a sentence we have never seen. The original
+    // applyTranslation() no-op'd here; materialising a row would paint the
+    // string "undefined" into the lane. /display constructs a Flow per lane
+    // at runtime, so this is reachable, not theoretical.
+    if (typeof s.en !== "string") return;
     const row = { translations: null, final: false, ...s };
     this.sentences.set(row.id, row);
     this.order.push(row.id);
