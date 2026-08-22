@@ -151,6 +151,20 @@ class _AsyncTranslatorBase:
             return await loop.run_in_executor(
                 None, self.translate_all_sync, text, context)
 
+    async def translate_sentences(self, sentences, context=""):
+        """One dict per sentence. Stage 2's per-sentence publishing path.
+
+        Holds the GPU lock once for the whole list, not once per sentence —
+        the batching inside translate_sentences_sync is only worth anything if
+        the caller does not serialise around it.
+        """
+        if not sentences:
+            return []
+        async with self._lock:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None, self.translate_sentences_sync, sentences, context)
+
 
 class IndicTrans2Translator(_AsyncTranslatorBase):
     def __init__(self, model_name=INDICTRANS2_MODEL):
@@ -208,28 +222,76 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
             out, skip_special_tokens=True, clean_up_tokenization_spaces=True
         )
         n = len(sentences)
+        # Per-sentence, NOT joined. The boundaries were always computed here and
+        # thrown away by a join; Stage 2 publishes each sentence under its own
+        # id and needs them. Callers that still want one string per language
+        # join at their own call site — see _joined().
         result = {}
         for i, lang in enumerate(langs):
             raws = decoded[i * n:(i + 1) * n]
             outs = self.processors[lang].postprocess_batch(
                 raws, lang=FLORES_CODES[lang]
             )
-            result[lang] = " ".join(
+            result[lang] = [
                 apply_glossary(lang, _postprocess(lang, o)) for o in outs
-            )
+            ]
         return result
+
+    def _joined(self, sentences, langs):
+        """_generate, collapsed back to one string per language.
+
+        The chunk-level API still wants a single string; Stage 2's per-sentence
+        API does not. One generate call either way.
+        """
+        per_sentence = self._generate(sentences, langs)
+        return {lang: " ".join(parts) for lang, parts in per_sentence.items()}
+
+    def translate_sentences_sync(self, sentences, context=""):
+        """Translate a list of sentences, returning one dict per sentence.
+
+        Stage 2 publishes each sentence under its own id, so it needs the
+        boundaries _generate already computes. Critically this is still ONE
+        batched generate for every sentence x every language — turning a
+        3-sentence chunk into three serialised GPU calls behind the asyncio
+        lock would undo the latency design (mt median 0.8s per chunk on
+        2026-08-21) for no benefit.
+        """
+        cleaned = [apply_source_rewrites(s) for s in sentences if s and s.strip()]
+        if not cleaned:
+            return []
+
+        # Context mode (off by default — see config.MT_USE_CONTEXT, which
+        # measured it inventing a negation) needs the single-input path and its
+        # content-loss recovery, and only the FIRST sentence has a predecessor
+        # outside this batch. So delegate that one and batch the rest, rather
+        # than reimplementing the recovery here or silently dropping context.
+        if MT_USE_CONTEXT and context:
+            head = self.translate_all_sync(cleaned[0], context=context)
+            if len(cleaned) == 1:
+                return [head]
+            rest = self._generate(cleaned[1:], TARGET_LANGS)
+            return [head] + [
+                {lang: rest[lang][i] for lang in TARGET_LANGS}
+                for i in range(len(cleaned) - 1)
+            ]
+
+        per_lang = self._generate(cleaned, TARGET_LANGS)
+        return [
+            {lang: per_lang[lang][i] for lang in TARGET_LANGS}
+            for i in range(len(cleaned))
+        ]
 
     def translate_all_sync(self, text, context=""):
         text = apply_source_rewrites(text)
         ctx = last_sentence(context) if (MT_USE_CONTEXT and context) else ""
         if not ctx:
             # Per-sentence: independent rows, still one generate call.
-            return self._generate(split_source_sentences(text) or [text],
-                                  TARGET_LANGS)
+            return self._joined(split_source_sentences(text) or [text],
+                                TARGET_LANGS)
 
         # Context mode keeps the single-input path: the recovery step drops the
         # context's translation, which only makes sense on one joined output.
-        joined = self._generate([f"{ctx} {text}"], TARGET_LANGS)
+        joined = self._joined([f"{ctx} {text}"], TARGET_LANGS)
 
         # Recovery. ctx is always exactly one sentence, so exactly one target
         # sentence is dropped. If what is left has fewer sentences than the
@@ -248,8 +310,8 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
             else:
                 result[lang] = " ".join(kept)
         if retry:
-            result.update(self._generate(split_source_sentences(text) or [text],
-                                         retry))
+            result.update(self._joined(split_source_sentences(text) or [text],
+                                       retry))
         return {lang: result[lang] for lang in TARGET_LANGS}
 
 

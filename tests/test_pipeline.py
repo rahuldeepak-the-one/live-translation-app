@@ -15,6 +15,11 @@ class StubTranslator:
     async def translate_all(self, text, context=""):
         return {"ml": f"ml:{text}", "te": f"te:{text}", "hi": f"hi:{text}"}
 
+    async def translate_sentences(self, sentences, context=""):
+        # Mirrors the real interface: one dict per sentence, one call.
+        return [{"ml": f"ml:{s}", "te": f"te:{s}", "hi": f"hi:{s}"}
+                for s in sentences]
+
 
 async def test_speech_flows_to_screens():
     hub = BroadcastHub()
@@ -315,6 +320,10 @@ async def test_fragment_reaches_the_translator_without_its_ellipsis():
             self.seen.append(text)
             return {"ml": "", "te": "", "hi": ""}
 
+        async def translate_sentences(self, sentences, context=""):
+            self.seen.extend(sentences)
+            return [{"ml": "", "te": "", "hi": ""} for _ in sentences]
+
     from config import MAX_SENTENCE_HOLD_S
     clock = FakeClock()
     translator = RecordingTranslator()
@@ -374,6 +383,10 @@ async def test_ellipsis_fragment_is_held_and_joined_not_flushed():
             self.seen.append(text)
             return {"ml": "", "te": "", "hi": ""}
 
+        async def translate_sentences(self, sentences, context=""):
+            self.seen.extend(sentences)
+            return [{"ml": "", "te": "", "hi": ""} for _ in sentences]
+
     rec = Rec()
     pipe = UtterancePipeline(
         SeqSTT("The steward's unethical behavior is never...",
@@ -386,7 +399,10 @@ async def test_ellipsis_fragment_is_held_and_joined_not_flushed():
 
     await pipe.process(None)
 
-    assert len(rec.seen) == 1
+    # Stage 2 publishes per sentence, so the joined text arrives as two rows.
+    # The point of this test is unchanged: "is never" met "endorsed" instead of
+    # being flushed alone, and they are in the SAME row.
+    assert len(rec.seen) == 2, rec.seen
     assert "is never endorsed" in rec.seen[0], rec.seen[0]
 
 
@@ -410,6 +426,10 @@ async def test_hold_timeout_measures_silence_not_sentence_age():
             self.seen.append(text)
             return {"ml": "", "te": "", "hi": ""}
 
+        async def translate_sentences(self, sentences, context=""):
+            self.seen.extend(sentences)
+            return [{"ml": "", "te": "", "hi": ""} for _ in sentences]
+
     clock, rec = FakeClock(), Rec()
     pipe = UtterancePipeline(
         SeqSTT("The steward's unethical behavior is never...",
@@ -430,8 +450,10 @@ async def test_hold_timeout_measures_silence_not_sentence_age():
 
     await pipe.process(None)                       # the continuation lands
 
-    assert len(rec.seen) == 1
-    assert "ability to understand his situation" in rec.seen[0], rec.seen[0]
+    # Two complete sentences under Stage 2, one row each. What matters is that
+    # the partial word was rejoined rather than flushed as a fragment.
+    assert len(rec.seen) == 2, rec.seen
+    assert "ability to understand his situation" in " ".join(rec.seen), rec.seen
 
 
 def test_hyphen_cut_partial_word_is_dropped_at_the_join():
@@ -458,6 +480,14 @@ class CtxTranslator:
     async def translate_all(self, text, context=""):
         self.calls.append((text, context))
         return {"ml": f"ml:{text}", "te": f"te:{text}", "hi": f"hi:{text}"}
+
+    async def translate_sentences(self, sentences, context=""):
+        # Stage 2 batches a chunk's sentences into one call; the context is the
+        # sentence before the FIRST of them.
+        for i, sentence in enumerate(sentences):
+            self.calls.append((sentence, context if i == 0 else ""))
+        return [{"ml": f"ml:{s}", "te": f"te:{s}", "hi": f"hi:{s}"}
+                for s in sentences]
 
 
 async def test_first_sentence_has_no_context():
@@ -622,6 +652,10 @@ async def test_no_clock_reading_inside_process_can_flush_a_fragment():
             self.seen.append(text)
             return {"ml": "", "te": "", "hi": ""}
 
+        async def translate_sentences(self, sentences, context=""):
+            self.seen.extend(sentences)
+            return [{"ml": "", "te": "", "hi": ""} for _ in sentences]
+
     rec = Rec()
     pipe = UtterancePipeline(
         StubSTT("The steward's unethical behavior is never"),
@@ -631,3 +665,144 @@ async def test_no_clock_reading_inside_process_can_flush_a_fragment():
 
     assert rec.seen == [], f"a fragment reached the translator: {rec.seen}"
     assert pipe._pending is not None, "the fragment was not held"
+
+
+# --- Stage 2: a sentence, not a chunk, is the published unit ------------------
+
+class RecordingTranslator(StubTranslator):
+    """Counts calls, so a per-sentence publish that lost batching is visible."""
+
+    def __init__(self):
+        self.sentence_calls = []
+
+    async def translate_sentences(self, sentences, context=""):
+        self.sentence_calls.append(list(sentences))
+        return [{"ml": f"ml:{s}", "te": f"te:{s}", "hi": f"hi:{s}"} for s in sentences]
+
+
+async def test_a_multi_sentence_chunk_publishes_each_sentence_separately():
+    """One chunk was one id — median 3 sentences and 136 chars, so lanes moved
+    in jumps and `final` stayed coarse. Each complete sentence is now its own."""
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(
+        SeqSTT("Wisdom is not moral. It is practical. Amen."),
+        RecordingTranslator(), hub)
+
+    await pipe.process(None)
+
+    sentences = [m for m in screen.sent if m["type"] == "sentence"]
+    assert [m["en"] for m in sentences] == [
+        "Wisdom is not moral.", "It is practical.", "Amen."]
+    assert [m["id"] for m in sentences] == [1, 2, 3]
+    assert all(m["final"] for m in sentences)
+
+
+async def test_every_sentence_gets_its_own_translation():
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(SeqSTT("God is love. He loves the world."),
+                             RecordingTranslator(), hub)
+
+    await pipe.process(None)
+
+    translations = [m for m in screen.sent if m["type"] == "translation"]
+    assert [m["id"] for m in translations] == [1, 2]
+    assert translations[0]["ml"] == "ml:God is love."
+    assert translations[1]["ml"] == "ml:He loves the world."
+
+
+async def test_a_chunk_costs_ONE_translator_call_however_many_sentences():
+    """Publishing per sentence must not become one GPU round trip per sentence.
+
+    The chunked engine translated a 3-sentence chunk in a single batched call
+    (mt median 0.8s on 2026-08-21). Three serialised calls behind the GPU lock
+    would undo that for no benefit.
+    """
+    hub = BroadcastHub()
+    translator = RecordingTranslator()
+    pipe = UtterancePipeline(SeqSTT("One. Two. Three."), translator, hub)
+
+    await pipe.process(None)
+
+    assert len(translator.sentence_calls) == 1, translator.sentence_calls
+    assert translator.sentence_calls[0] == ["One.", "Two.", "Three."]
+
+
+async def test_a_trailing_incomplete_sentence_stays_pending():
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(SeqSTT("Wisdom is not moral. But it is"),
+                             RecordingTranslator(), hub)
+
+    await pipe.process(None)
+
+    sentences = [m for m in screen.sent if m["type"] == "sentence"]
+    assert [(m["en"], m["final"]) for m in sentences] == [
+        ("Wisdom is not moral.", True),
+        ("But it is", False),
+    ]
+    # only the complete one reached the translator
+    translations = [m for m in screen.sent if m["type"] == "translation"]
+    assert [m["id"] for m in translations] == [1]
+
+
+async def test_the_pending_sentence_keeps_its_id_across_chunks():
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(SeqSTT("First done. But it is", "practical."),
+                             RecordingTranslator(), hub)
+
+    await pipe.process(None)
+    await pipe.process(None)
+
+    sentences = [m for m in screen.sent if m["type"] == "sentence"]
+    # id 2 is revised in place, never duplicated under a new id
+    assert [(m["id"], m["en"], m["final"]) for m in sentences] == [
+        (1, "First done.", True),
+        (2, "But it is", False),
+        (2, "But it is practical.", True),
+    ]
+
+
+async def test_ids_stay_monotonic_across_chunks():
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(SeqSTT("A one. A two.", "A three."),
+                             RecordingTranslator(), hub)
+
+    await pipe.process(None)
+    await pipe.process(None)
+
+    ids = [m["id"] for m in screen.sent if m["type"] == "sentence"]
+    assert ids == sorted(ids)
+    assert ids == [1, 2, 3]
+
+
+async def test_a_single_complete_sentence_still_works():
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(SeqSTT("God is love."), RecordingTranslator(), hub)
+
+    assert await pipe.process(None) == (1, "God is love.")
+    assert [m["type"] for m in screen.sent] == [
+        "history", "display", "sentence", "translation"]
+
+
+async def test_each_sentence_is_written_to_the_transcript_separately():
+    class FakeLog:
+        def __init__(self):
+            self.records = []
+
+        def write(self, **record):
+            self.records.append(record)
+
+    log = FakeLog()
+    hub = BroadcastHub()
+    pipe = UtterancePipeline(SeqSTT("God is love. He loves the world."),
+                             RecordingTranslator(), hub, transcript=log)
+
+    await pipe.process(None)
+
+    assert [r["en"] for r in log.records] == ["God is love.", "He loves the world."]
+    assert [r["id"] for r in log.records] == [1, 2]

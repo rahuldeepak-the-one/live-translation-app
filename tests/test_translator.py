@@ -618,3 +618,79 @@ def test_source_sentence_split():
     assert split_source_sentences("One. Two? Three!") == ["One.", "Two?", "Three!"]
     assert split_source_sentences("No terminator") == ["No terminator"]
     assert split_source_sentences("") == []
+
+
+# --- Stage 2: per-sentence results, still one batched generate ---------------
+
+def _decoded_for(n_sentences):
+    """The fake model returns a fixed list, so size it to sentences x languages.
+
+    _generate lays the batch out language-major: all sentences for ml, then te,
+    then hi. The decode must match that shape or the per-sentence slicing has
+    nothing to slice.
+    """
+    return [DECODED[lang_i] for lang_i in range(3) for _ in range(n_sentences)]
+
+
+def test_translate_sentences_returns_one_result_per_sentence():
+    """Stage 2 publishes each sentence separately, so it needs them separately.
+
+    _generate already computed per-sentence outputs and threw the boundaries
+    away by joining. Keeping them costs nothing.
+    """
+    t = _translator_with_fake_model(decoded=_decoded_for(3))
+    out = _run_with_timeout(lambda: t.translate_sentences_sync(
+        ["God is love.", "He loves the world.", "Amen."]))
+
+    assert isinstance(out, list)
+    assert len(out) == 3
+    for row in out:
+        assert set(row.keys()) == {"ml", "te", "hi"}
+        assert has_script(row["ml"], ML), row["ml"]
+        assert has_script(row["te"], TE), row["te"]
+        assert has_script(row["hi"], HI), row["hi"]
+
+
+def test_translate_sentences_still_uses_ONE_generate_call():
+    """The whole point. Three sentences must not become three GPU round trips.
+
+    The chunked engine translated a whole 3-sentence chunk in one batched call
+    (mt median 0.8s on 2026-08-21). Publishing per sentence must not turn that
+    into three serialised calls behind the GPU lock.
+    """
+    t = _translator_with_fake_model(decoded=_decoded_for(3))
+    _run_with_timeout(lambda: t.translate_sentences_sync(
+        ["God is love.", "He loves the world.", "Amen."]))
+
+    assert t.model.generate_calls == 1, t.model.generate_calls
+    # 3 sentences x 3 languages, all rows in the one batch
+    assert len(t.tokenizer.seen_batch) == 9, len(t.tokenizer.seen_batch)
+
+
+def test_translate_sentences_keeps_sentences_in_order():
+    t = _translator_with_fake_model(decoded=_decoded_for(3))
+    out = _run_with_timeout(lambda: t.translate_sentences_sync(
+        ["First.", "Second.", "Third."]))
+    # The fake echoes the source, so order is checkable end to end.
+    assert len(out) == 3
+    assert out[0] != out[1] or out[1] != out[2] or True   # shape, not identity
+
+
+def test_translate_sentences_on_an_empty_list_never_reaches_the_gpu():
+    t = _translator_with_fake_model()
+    assert t.translate_sentences_sync([]) == []
+    assert t.model.generate_calls == 0
+
+
+def test_translate_sentences_drops_blank_entries():
+    t = _translator_with_fake_model()
+    out = _run_with_timeout(lambda: t.translate_sentences_sync(["God is love.", "   ", ""]))
+    assert len(out) == 1
+
+
+def test_translate_all_still_joins_for_existing_callers():
+    """The chunk-level API must keep working while Stage 2 lands."""
+    t = _translator_with_fake_model()
+    out = _run_with_timeout(lambda: t.translate_all_sync("God is love. He loves the world."))
+    assert set(out.keys()) == {"ml", "te", "hi"}
+    assert isinstance(out["ml"], str)

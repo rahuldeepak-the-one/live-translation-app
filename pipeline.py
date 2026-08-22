@@ -8,6 +8,7 @@ import logging
 import time
 
 from config import SENTENCE_END_CHARS, MAX_SENTENCE_HOLD_S, MAX_PENDING_CHARS
+from translator import split_source_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -147,26 +148,60 @@ class UtterancePipeline:
         # while the speaker was still going. MAX_PENDING_CHARS bounds the length.
         touched = self._clock()
 
+        # Stage 2: the published unit is a SENTENCE, not a chunk. A chunk ran a
+        # median of 3 sentences and 136 chars on 2026-08-21, so a lane advanced
+        # in jumps rather than flowing, and `final` was coarse — a three-sentence
+        # chunk stayed grey until its last sentence completed, showing text that
+        # would never change as though it might.
+        #
+        # The FIRST sentence inherits `sid`, because it is the continuation of
+        # whatever was pending; later ones take fresh ids. That is what keeps a
+        # held sentence revising in place instead of duplicating under a new id.
+        parts = split_source_sentences(joined) or [joined]
         # Time is deliberately absent from this decision. Silence is what ends
         # a held sentence, and flush_if_stale() is where it is measured; the
         # `held_for >= MAX_SENTENCE_HOLD_S` disjunct that used to sit here was
         # computed from two clock reads with nothing between them, so it was
         # always ~0 -- and had it measured anything it would have measured
         # sentence AGE, which is what the 2026-08-21 audit removed.
-        flush = looks_complete(joined) or len(joined) >= MAX_PENDING_CHARS
+        tail_complete = (looks_complete(parts[-1])
+                         or len(parts[-1]) >= MAX_PENDING_CHARS)
+
+        numbered = []
+        for i, part in enumerate(parts):
+            if i == 0:
+                part_id = sid
+            else:
+                self._counter += 1
+                part_id = self._counter
+            numbered.append((part_id, part))
 
         # English first, always — this is what keeps the captions feeling live.
-        # Re-publishing the same id revises the row rather than duplicating it.
-        # `final` is exactly the flush decision: a held sentence is still
-        # growing and renders grey, a flushed one is frozen and renders solid.
-        await self.hub.publish_sentence(sid, joined, final=flush)
+        # Re-publishing an id revises that row rather than duplicating it.
+        for i, (part_id, part) in enumerate(numbered):
+            is_last = i == len(numbered) - 1
+            await self.hub.publish_sentence(
+                part_id, part, final=(tail_complete or not is_last))
 
-        if not flush:
-            self._pending = {"id": sid, "text": joined, "touched": touched}
-            logger.debug("#%d held (%d chars): %s", sid, len(joined), joined)
-            return sid, joined
+        complete = numbered if tail_complete else numbered[:-1]
+        if not tail_complete:
+            pending_id, pending_text = numbered[-1]
+            self._pending = {"id": pending_id, "text": pending_text,
+                             "touched": touched}
+            logger.debug("#%d held (%d chars): %s",
+                         pending_id, len(pending_text), pending_text)
+        else:
+            self._pending = None
 
-        return await self._flush(sid, joined, t_stt)
+        if complete:
+            # ONE translator call for every complete sentence in this chunk.
+            # Per-sentence publishing must not become a GPU round trip per
+            # sentence: the batched call ran mt median 0.8s for a whole chunk,
+            # and serialising three behind the GPU lock would undo that.
+            await self._flush_many(complete, t_stt)
+
+        last_id, last_text = numbered[-1]
+        return last_id, last_text
 
     async def flush_if_stale(self):
         """Translate a held sentence the speaker never finished.
@@ -189,6 +224,32 @@ class UtterancePipeline:
         result = await self._flush(sid, joined, 0.0)
         self._context = ""      # the speaker stopped; the next line is new
         return result[0]
+
+    async def _flush_many(self, numbered, t_stt):
+        """Translate and publish several complete sentences in ONE call.
+
+        The batching is the point. Publishing per sentence is a presentation
+        change; it must not turn a chunk's single batched generate into one GPU
+        round trip per sentence, because the GPU lock serialises them and the
+        latency would stack (mt median 0.8s per chunk on 2026-08-21).
+        """
+        t1 = self._clock()
+        cleaned = [clean_for_translation(text) for _sid, text in numbered]
+        results = await self.translator.translate_sentences(
+            cleaned, context=self._context)
+        t_mt = self._clock() - t1
+
+        if cleaned:
+            self._context = cleaned[-1]
+
+        for (sid, raw), source, translations in zip(numbered, cleaned, results):
+            await self.hub.publish_translation(sid, translations)
+            if self.transcript is not None:
+                self.transcript.write(
+                    id=sid, en=raw, translations=translations,
+                    stt_s=round(t_stt, 3), mt_s=round(t_mt, 3),
+                )
+            logger.info("#%d stt=%.2fs mt=%.2fs: %s", sid, t_stt, t_mt, raw)
 
     async def _flush(self, sid, joined, t_stt):
         self._pending = None

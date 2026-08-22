@@ -26,7 +26,13 @@ MIN_TRIGGER_S = 1.5          # need at least this much audio before silence-trig
 SPEECH_WINDOW_S = 0.1       # window size for the "is there any speech here" check
 
 # --- Broadcast ---
-HISTORY_SIZE = 10            # sentences replayed to late-joining screens
+# Sentences replayed to a late-joining screen. This counted CHUNKS until Stage 2
+# made a sentence the published unit; a chunk ran a median of 3 sentences on
+# 2026-08-21, so 10 became roughly 3 sentences of backlog rather than 10.
+# Raised to keep the same amount of readable history behind a reconnect — a
+# projector that drops its WiFi mid-service must come back with the passage
+# still on it, not three lines.
+HISTORY_SIZE = 30
 
 # --- Server ---
 HOST = "0.0.0.0"
