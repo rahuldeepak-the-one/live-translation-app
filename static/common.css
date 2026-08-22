@@ -90,6 +90,18 @@ main::before { content: ""; margin-top: auto; }
    rule, which never had an awaiting-and-live case to cover on /view. */
 .lane-text span.live { opacity: 1; }
 .lane-text span.live.awaiting { color: #b8c6d6; }
+/* ...but not so far that `final` stops meaning anything. A bare
+   `.live { opacity: 1 }` overrides .provisional entirely, so the newest line —
+   the ONLY line that is ever provisional — rendered identically whether the
+   server could still revise it or had frozen it. That silently discards the
+   whole grey-may-change / solid-never-will contract on the one line it applies
+   to. 0.9 restores a visible step while staying far above the AA floor.
+   Measured in Chrome against #0b0f14, transitions disabled:
+       awaiting  (grey English standing in)  frozen 11.06:1  provisional  9.08:1
+       translated                            frozen 16.45:1  provisional 13.35:1
+   Do not read these with getComputedStyle right after a class change — the
+   `transition: color` above means you get the pre-change colour. */
+.lane-text span.live.provisional { opacity: 0.9; }
 
 /* A single lane owning the whole wall spends the extra height on MORE HISTORY,
    not larger text: the operator pins a language so someone who looked away can
