@@ -37,8 +37,24 @@ function installStubs(win) {
   try { win.localStorage.clear(); } catch (e) { /* opaque origin */ }
 }
 
+// Chrome (headless and headed, confirmed against the real binary this suite
+// runs under) silently refuses to execute a <script type="module" src=...>
+// that arrives through document.write() — classic <script src> tags run fine
+// through the same call. Pull module-script tags out of the markup before
+// writing it, then re-insert them as real nodes afterwards; a dynamically
+// created script only stays in document order and blocks readyState
+// "complete" (matching how a parser-inserted <script> behaves) if `.async`
+// is explicitly set to false before it is attached.
+const MODULE_SCRIPT_RE = /<script\s+type=["']module["']\s+src=["']([^"']+)["']\s*><\/script>/gi;
+
 export async function loadPage(path, { width = 390, height = 720 } = {}) {
   const html = await fetch(path).then((r) => r.text());
+  const moduleSrcs = [];
+  const withoutModules = html.replace(MODULE_SCRIPT_RE, (_, src) => {
+    moduleSrcs.push(src);
+    return "";
+  });
+
   const frame = document.createElement("iframe");
   frame.style.cssText = `width:${width}px;height:${height}px;border:0;display:block;`;
   document.body.appendChild(frame);
@@ -48,7 +64,7 @@ export async function loadPage(path, { width = 390, height = 720 } = {}) {
 
   const doc = frame.contentDocument;
   doc.open();
-  doc.write(html);                      // written <script src> tags do execute
+  doc.write(withoutModules);             // written <script src> tags do execute
   doc.close();
 
   await new Promise((resolve) => {
@@ -57,6 +73,19 @@ export async function loadPage(path, { width = 390, height = 720 } = {}) {
       if (doc.readyState === "complete") { clearInterval(timer); resolve(); }
     }, 20);
   });
+
+  for (const src of moduleSrcs) {
+    await new Promise((resolve, reject) => {
+      const script = doc.createElement("script");
+      script.type = "module";
+      script.async = false;             // see comment above: keeps it blocking + ordered
+      script.onload = () => resolve();
+      script.onerror = (e) => reject(new Error(`module script failed to load: ${src}`));
+      doc.body.appendChild(script);
+      script.src = src;
+    });
+  }
+
   return { win, doc, frame };
 }
 

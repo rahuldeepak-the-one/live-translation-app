@@ -9,6 +9,8 @@
  *      than a placeholder, so the page never looks stalled while the server
  *      waits for the sentence to finish.
  */
+import { Flow } from "/static/flow.js";
+
 const MAX_SENTENCES = 2000;      // whole service; guard against unbounded DOM
 const LIVE_EDGE_PX = 80;         // "close enough to the bottom" for autoscroll
 const SIZE_STEPS = ["1.1rem", "1.3rem", "1.5rem", "1.8rem", "2.2rem", "2.7rem"];
@@ -16,10 +18,7 @@ const SIZE_STEPS = ["1.1rem", "1.3rem", "1.5rem", "1.8rem", "2.2rem", "2.7rem"];
 const state = {
   lang: localStorage.getItem("lang") || "ml",
   sizeStep: Number(localStorage.getItem("sizeStep") ?? 2),
-  order: [],                     // sentence ids, oldest first
-  sentences: new Map(),          // id -> {id, en, translations|null}
 };
-const spans = new Map();         // id -> HTMLSpanElement
 
 const els = {
   captions: document.getElementById("captions"),
@@ -32,6 +31,8 @@ const els = {
   bigger: document.getElementById("text-bigger"),
   buttons: document.querySelectorAll("#picker button"),
 };
+
+const flow = new Flow(els.transcript, state.lang);
 
 /* ---------------------------------------------------------------- language */
 
@@ -91,54 +92,9 @@ els.jumpLive.addEventListener("click", () => {
 
 /* ---------------------------------------------------------------- rendering */
 
-function textFor(s) {
-  if (state.lang === "en") return { text: s.en, awaiting: false };
-  const translated = s.translations?.[state.lang];
-  // No translation yet — show the English rather than an empty gap. The server
-  // holds a sentence until it is complete, so this is the sentence still being
-  // spoken; it is replaced in place the moment the translation arrives.
-  return translated
-    ? { text: translated, awaiting: false }
-    : { text: s.en, awaiting: true };
-}
-
-function paint(span, s) {
-  const { text, awaiting } = textFor(s);
-  span.textContent = `${text} `;   // trailing space so the paragraph wraps naturally
-  span.classList.toggle("awaiting", awaiting);
-}
-
-function upsert(s) {
-  let span = spans.get(s.id);
-  if (!span) {
-    span = document.createElement("span");
-    span.dataset.sid = String(s.id);
-    spans.set(s.id, span);
-    els.transcript.appendChild(span);
-  }
-  paint(span, s);
-}
-
-function markLive() {
-  const newest = state.order[state.order.length - 1];
-  for (const [id, span] of spans) span.classList.toggle("live", id === newest);
-}
-
-function trim() {
-  while (state.order.length > MAX_SENTENCES) {
-    const id = state.order.shift();
-    state.sentences.delete(id);
-    spans.get(id)?.remove();
-    spans.delete(id);
-  }
-}
-
 function rebuild() {
-  els.transcript.textContent = "";
-  spans.clear();
-  for (const id of state.order) upsert(state.sentences.get(id));
-  markLive();
-  els.empty.style.display = state.order.length ? "none" : "";
+  flow.setLang(state.lang);
+  els.empty.style.display = flow.isEmpty ? "" : "none";
   scrollToLive();
   updateJumpLive();
 }
@@ -148,9 +104,8 @@ function rebuild() {
 function update(mutate) {
   const stick = atLiveEdge();
   mutate();
-  trim();
-  markLive();
-  els.empty.style.display = state.order.length ? "none" : "";
+  flow.trim(MAX_SENTENCES);
+  els.empty.style.display = flow.isEmpty ? "" : "none";
   if (stick) scrollToLive();
   updateJumpLive();
 }
@@ -187,24 +142,11 @@ function connect() {
   let gotHistory = false;
 
   function applySentence(s) {
-    const existing = state.sentences.get(s.id);
-    if (existing) {
-      // The server revises a held sentence in place as the speaker continues.
-      existing.en = s.en;
-      upsert(existing);
-      return;
-    }
-    const row = { id: s.id, en: s.en, translations: null };
-    state.sentences.set(s.id, row);
-    state.order.push(s.id);
-    upsert(row);
+    flow.apply({ id: s.id, en: s.en, final: s.final });
   }
 
   function applyTranslation(id, translations) {
-    const row = state.sentences.get(id);
-    if (!row) return;
-    row.translations = translations;
-    upsert(row);
+    flow.apply({ id, translations });
   }
 
   ws.onopen = () => {
@@ -215,20 +157,15 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     if (msg.type === "history") {
-      state.order = [];
-      state.sentences.clear();
-      for (const s of msg.sentences) {
-        state.sentences.set(s.id, { ...s });
-        state.order.push(s.id);
-      }
+      flow.reset(msg.sentences);
       connSentences.forEach(applySentence);
       connTranslations.forEach(([id, t]) => applyTranslation(id, t));
       gotHistory = true;
-      trim();
+      flow.trim(MAX_SENTENCES);
       rebuild();
     } else if (msg.type === "sentence") {
-      if (!gotHistory) connSentences.push({ id: msg.id, en: msg.en });
-      update(() => applySentence({ id: msg.id, en: msg.en }));
+      if (!gotHistory) connSentences.push({ id: msg.id, en: msg.en, final: msg.final });
+      update(() => applySentence({ id: msg.id, en: msg.en, final: msg.final }));
     } else if (msg.type === "translation") {
       const { type, id, ...translations } = msg;
       if (!gotHistory) connTranslations.push([id, translations]);

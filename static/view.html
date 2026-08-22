@@ -43,6 +43,9 @@
     /* Not yet translated: the English shows through in grey and is swapped for
        the translation when it lands, so the page never looks stalled. */
     #transcript span.awaiting { color: #6b7c8f; }
+    /* Still being revised by the server — see the `final` flag. Distinct from
+       .awaiting, which means "translated text has not arrived yet". */
+    #transcript span.provisional { opacity: 0.75; }
     /* :not(.awaiting) matters — the newest sentence is almost always the one
        still awaiting translation, so an unqualified .live rule would cancel
        the dimming exactly when it is needed. */
@@ -78,6 +81,6 @@
     <p id="transcript"></p>
   </main>
   <button id="jump-live" type="button" hidden>↓ Live</button>
-  <script src="/static/view.js"></script>
+  <script type="module" src="/static/view.js"></script>
 </body>
 </html>
