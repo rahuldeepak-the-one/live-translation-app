@@ -28,6 +28,15 @@ def test_missing_keys_fall_back_to_defaults():
         "lanes": ["ml"], "focus": None, "rotate": 0}
 
 
+def test_omitted_lanes_is_rejected_not_defaulted():
+    # /control always sends a complete state, so a message with no `lanes`
+    # key at all is malformed. Silently re-enabling every lane (English
+    # reappearing unasked) would be a visibly wrong recovery, not a helpful
+    # default.
+    with pytest.raises(ValueError):
+        validate({"focus": "ml"})
+
+
 @pytest.mark.parametrize("lanes", [[], ["xx"], ["ml", "ml"], "ml", None])
 def test_bad_lanes_rejected(lanes):
     with pytest.raises(ValueError):

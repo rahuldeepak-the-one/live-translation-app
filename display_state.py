@@ -15,7 +15,8 @@ KNOWN_LANGS = (SOURCE_LANG, *TARGET_LANGS)
 
 
 def initial_state():
-    """The wall at startup. A fresh dict each call — callers mutate it."""
+    """The wall at startup. A fresh dict each call — publish_display() always
+    replaces the retained state wholesale, so nothing mutates it in place."""
     return {"lanes": list(DEFAULT_LANES), "focus": None, "rotate": 0}
 
 
@@ -49,7 +50,14 @@ def validate(raw):
     if not isinstance(raw, dict):
         raise ValueError("state must be an object")
 
-    lanes = _clean_lanes(raw.get("lanes", DEFAULT_LANES))
+    # `lanes` is required, not defaulted: /control always sends a complete
+    # state, so a message missing it is malformed, not merely terse. Silently
+    # re-enabling every lane would widen the wall (English reappearing) with
+    # nobody having asked for it — the opposite of "rejects rather than
+    # guesses" above.
+    if "lanes" not in raw:
+        raise ValueError("lanes is required")
+    lanes = _clean_lanes(raw.get("lanes"))
     rotate = _clean_rotate(raw.get("rotate", 0))
 
     focus = raw.get("focus")

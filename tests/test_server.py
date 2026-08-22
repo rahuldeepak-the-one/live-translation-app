@@ -170,6 +170,17 @@ def test_wrong_control_token_is_indistinguishable_from_a_missing_page():
     assert absent.status_code == 404
 
 
+def test_non_ascii_control_token_is_a_404_not_a_500():
+    # secrets.compare_digest raises TypeError on a non-ASCII str, which would
+    # otherwise surface as an unhandled 500 — a crash log is as good a signal
+    # to a prober that /control/{token} is a live route as a distinguishable
+    # response would be. One accented character must 404 exactly like any
+    # other wrong guess.
+    client = make_client()
+    response = client.get("/control/caf%C3%A9")
+    assert response.status_code == 404
+
+
 def test_control_token_is_not_guessable_from_the_public_pages():
     client = make_client()
     token = server_module.control_token()

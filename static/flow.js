@@ -34,6 +34,9 @@ export class Flow {
   apply(s) {
     const existing = this.sentences.get(s.id);
     if (existing) {
+      // Revising a sentence already on screen never changes which one is
+      // newest, so no _markLive() here — see _insert() for why a fresh
+      // sentence is different.
       Object.assign(existing, s);
       this._paint(existing);
       return;
@@ -43,11 +46,19 @@ export class Flow {
     // string "undefined" into the lane. /display constructs a Flow per lane
     // at runtime, so this is reachable, not theoretical.
     if (typeof s.en !== "string") return;
+    this._insert(s);
+    this._markLive();
+  }
+
+  // Shared by apply() (one new sentence) and reset() (many). Never calls
+  // _markLive() itself: apply() needs it once, right after; reset() needs it
+  // once, after the whole batch — either callsite doing it per-row makes
+  // _markLive's full-span walk run once per sentence, i.e. O(n^2) overall.
+  _insert(s) {
     const row = { translations: null, final: false, ...s };
     this.sentences.set(row.id, row);
     this.order.push(row.id);
     this._paint(row);
-    this._markLive();
   }
 
   reset(sentences) {
@@ -55,7 +66,13 @@ export class Flow {
     this.order = [];
     this.sentences.clear();
     this.spans.clear();
-    for (const s of sentences) this.apply(s);
+    // Same "no en, no row" guard as apply() — reset() bypasses apply() to
+    // avoid its per-row _markLive(), but not the guard against a
+    // translation-only row painting the literal string "undefined".
+    for (const s of sentences) {
+      if (typeof s.en === "string") this._insert(s);
+    }
+    this._markLive();
   }
 
   trim(max) {
@@ -89,7 +106,11 @@ export class Flow {
     // The correction contract: grey while the server may still revise this
     // sentence, solid once it has frozen. See the spec's `final` section.
     span.classList.toggle("provisional", s.final === false);
-    this._markLive();
+    // No _markLive() here on purpose: _paint() runs once per sentence inside
+    // reset() and setLang(), and _markLive() itself walks every span, so a
+    // call here makes both O(n^2). Callers that can change which sentence is
+    // newest (apply()'s new-row branch, reset()) call it themselves, exactly
+    // once, after the paint work is done.
   }
 
   _markLive() {

@@ -70,13 +70,18 @@ function applyRotation() {
   }, rotate * 1000);
 }
 
+// Returns whether it actually rebuilt the DOM (false when the wanted lane SET
+// already matches what's built). The history handler needs to know: when this
+// returns true, every flow it now holds was just freshly built FROM the
+// current cache (see the `flow.reset()` a few lines down), so re-resetting
+// them again right after would be pure repeated work.
 function renderLanes() {
   const wanted = visibleLanes();
   // Set before the early return so the class tracks the mode (focused vs.
   // not) even on ticks where the visible lane SET happens not to change.
   els.wall.classList.toggle("focused", wanted.length === 1);
   const current = [...flows.keys()];
-  if (current.join(",") === wanted.join(",")) return;   // nothing structural changed
+  if (current.join(",") === wanted.join(",")) return false;   // nothing structural changed
 
   els.wall.textContent = "";
   flows.clear();
@@ -116,6 +121,7 @@ function renderLanes() {
   // clientHeight; once its later siblings are appended that height shrinks
   // and the earlier scrollTop falls short of the live edge.
   for (const flowEl of scrollers.values()) scrollLaneToLive(flowEl);
+  return true;
 }
 
 function scrollLaneToLive(flowEl) {
@@ -154,6 +160,16 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${proto}//${location.host}/ws/captions`);
 
+  // Events received on THIS connection before its history snapshot arrives.
+  // Replayed on top of history: hub.py adds a client to _clients before
+  // awaiting the history send, so a `sentence`/`translation` can legitimately
+  // arrive first. Mirrors view.js's connSentences/connTranslations — without
+  // this, that utterance paints once and then vanishes the instant history
+  // (which never saw it) arrives and wipes every lane's cache.
+  const connSentences = [];
+  const connTranslations = [];
+  let gotHistory = false;
+
   ws.onopen = () => {
     els.dot.classList.add("connected");
     els.statusText.textContent = "live";
@@ -165,10 +181,21 @@ function connect() {
       state.sentences.clear();
       state.order = [];
       for (const s of msg.sentences) remember(s);
-      renderLanes();
-      for (const [lang, flow] of flows) {
-        flow.reset(state.order.map((id) => state.sentences.get(id)));
-        scrollLaneToLive(scrollers.get(lang));
+      connSentences.forEach((s) => remember(s));
+      connTranslations.forEach(([id, translations]) => remember({ id, translations }));
+      gotHistory = true;
+      // `history` is a full-snapshot event (registration replay, or a fresh
+      // reconnect where stale pre-reconnect state must be discarded), so
+      // every existing flow needs to be brought up to date with the cache
+      // just rebuilt above — UNLESS renderLanes() just rebuilt them from
+      // that same cache already (the common case: the lane SET happens not
+      // to have changed, so it early-returns and these flows are stale).
+      // Resetting freshly-built flows again here would be pure repeated work.
+      if (!renderLanes()) {
+        for (const [lang, flow] of flows) {
+          flow.reset(state.order.map((id) => state.sentences.get(id)));
+          scrollLaneToLive(scrollers.get(lang));
+        }
       }
       els.empty.style.display = state.order.length ? "none" : "";
     } else if (msg.type === "display") {
@@ -177,9 +204,11 @@ function connect() {
       applyRotation();
       renderLanes();
     } else if (msg.type === "sentence") {
+      if (!gotHistory) connSentences.push({ id: msg.id, en: msg.en, final: msg.final });
       applyToLanes(remember({ id: msg.id, en: msg.en, final: msg.final }));
     } else if (msg.type === "translation") {
       const { type, id, ...translations } = msg;
+      if (!gotHistory) connTranslations.push([id, translations]);
       applyToLanes(remember({ id, translations }));
     }
   };

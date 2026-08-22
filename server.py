@@ -40,7 +40,15 @@ STATIC_DIR = Path(__file__).parent / "static"
 #
 # This is obscurity, not authentication. It stops a bored teenager on the church
 # WiFi. It does not stop anyone who can read the operator's screen or this log.
-_CONTROL_TOKEN = os.environ.get("CONTROL_TOKEN") or secrets.token_hex(3)
+_CONTROL_TOKEN = os.environ.get("CONTROL_TOKEN")
+if not _CONTROL_TOKEN:
+    # start.sh always sets CONTROL_TOKEN itself (and shows it in its own
+    # banner, printed before the server ever boots); this branch is only hit
+    # by `python server.py` directly, so it is the only place that needs to
+    # tell a developer where to find /control at all. Never send this to a
+    # page the congregation can load — see /view, /qr.svg above.
+    _CONTROL_TOKEN = secrets.token_hex(3)
+    logger.info("No CONTROL_TOKEN set — generated one for this run: %s", _CONTROL_TOKEN)
 
 
 def control_token():
@@ -181,8 +189,10 @@ def create_app(stt=None, translator=None, transcript=None):
     async def control_page(token: str):
         # compare_digest, and an identical 404 either way: a wrong token must be
         # indistinguishable from a path that was never a page, so the endpoint
-        # cannot be probed.
-        if not secrets.compare_digest(token, _CONTROL_TOKEN):
+        # cannot be probed. compare_digest requires ASCII-only str (it raises
+        # TypeError otherwise) — encode both sides so a non-ASCII token 404s
+        # like any other wrong guess instead of 500ing and logging a traceback.
+        if not secrets.compare_digest(token.encode(), _CONTROL_TOKEN.encode()):
             raise HTTPException(status_code=404)
         return FileResponse(STATIC_DIR / "control.html")
 

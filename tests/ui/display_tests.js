@@ -56,11 +56,14 @@ async function run() {
 
   // The whole point of a projector: newest text must be visible, and the
   // container must remain scrollable (common.css:36 documents the trap).
+  // `scrollHeight >= clientHeight` is true by definition (scrollHeight can
+  // never be smaller) and cannot fail; assert real overflow exists instead,
+  // the same shape tests/ui/view_tests.js uses for its `maxScroll` check.
   for (const lane of lanes()) {
     const flow = lane.querySelector(".lane-flow");
-    const scrollable = flow.scrollHeight >= flow.clientHeight;
-    check(`lane ${lane.dataset.lang} is not scroll-trapped`, scrollable,
-          `scrollHeight=${flow.scrollHeight} clientHeight=${flow.clientHeight}`);
+    const maxScroll = flow.scrollHeight - flow.clientHeight;
+    check(`lane ${lane.dataset.lang} is not scroll-trapped`, maxScroll > 0,
+          `maxScroll=${maxScroll} scrollHeight=${flow.scrollHeight} clientHeight=${flow.clientHeight}`);
     check(`lane ${lane.dataset.lang} is pinned to the live edge`,
           flow.scrollHeight - flow.clientHeight - flow.scrollTop <= 2,
           `${flow.scrollHeight - flow.clientHeight - flow.scrollTop}px from bottom`);
@@ -85,8 +88,33 @@ async function run() {
   await new Promise((r) => win.setTimeout(r, 2100));
   const ws2 = win.__sockets[win.__sockets.length - 1];
   check("display reconnected", ws2 !== ws, `${win.__sockets.length} sockets`);
+
+  // `ws2 !== ws` only proves a new socket object exists. Prove state is
+  // actually RESTORED on it: deliver history (replaying the same backlog a
+  // real server would still have) and a NARROWED lane set on ws2 itself, and
+  // assert the wall renders exactly that — not all four, and not by having
+  // silently kept running on the old (closed) `ws`.
+  const reconnectSentences = Array.from({ length: 12 }, (_, i) => {
+    const id = i + 1;
+    const { type, id: _id, ...translations } = translation(id);
+    return {
+      id, en: `Projector caption number ${id} is fairly long.`,
+      translations, final: true,
+    };
+  });
+  ws2.onopen();
+  ws2.deliver({ type: "history", sentences: reconnectSentences });
+  ws2.deliver(display(["ml"]));
+  check("reconnect restores the narrowed lane set on the new socket",
+        lanes().length === 1 && lanes()[0].dataset.lang === "ml",
+        lanes().map((l) => l.dataset.lang).join(","));
+  const mlAfterReconnect = doc.querySelector('.lane[data-lang="ml"] .lane-flow');
+  check("reconnect's narrowed lane holds the backlog replayed on the new socket",
+        mlAfterReconnect && mlAfterReconnect.querySelectorAll("span").length >= 12,
+        mlAfterReconnect && mlAfterReconnect.querySelectorAll("span").length);
+
   // --- focus -------------------------------------------------------------
-  ws.deliver(display(["en", "ml", "te", "hi"], "ml", 0));
+  ws2.deliver(display(["en", "ml", "te", "hi"], "ml", 0));
   check("focus renders exactly one lane", lanes().length === 1, lanes().length);
   check("the focused lane is the requested one",
         lanes()[0].dataset.lang === "ml", lanes()[0].dataset.lang);
@@ -99,7 +127,7 @@ async function run() {
         focusedFlow.querySelectorAll("span").length);
 
   // Leaving focus must restore lanes that are already full, not blank ones.
-  ws.deliver(display(["en", "ml", "te", "hi"], null, 0));
+  ws2.deliver(display(["en", "ml", "te", "hi"], null, 0));
   check("leaving focus restores every lane", lanes().length === 4, lanes().length);
   const restored = doc.querySelector('.lane[data-lang="te"] .lane-flow');
   check("restored lane is not blank",
@@ -127,14 +155,14 @@ async function run() {
   win.setInterval = (...a) => { setCalls++; return realSet.apply(win, a); };
   win.clearInterval = (...a) => { clearCalls++; return realClear.apply(win, a); };
 
-  ws.deliver(display(["ml", "te", "hi"], null, 20));
-  ws.deliver(display(["ml", "te", "hi"], null, 30));
-  ws.deliver(display(["ml", "te", "hi"], null, 20));
+  ws2.deliver(display(["ml", "te", "hi"], null, 20));
+  ws2.deliver(display(["ml", "te", "hi"], null, 30));
+  ws2.deliver(display(["ml", "te", "hi"], null, 20));
   check("every rotating display message clears before it sets",
         clearCalls === 3 && setCalls === 3, `clear=${clearCalls} set=${setCalls}`);
 
   // Pinning must clear without setting, so a rotation timer cannot survive it.
-  ws.deliver(display(["ml", "te", "hi"], "ml", 0));
+  ws2.deliver(display(["ml", "te", "hi"], "ml", 0));
   check("pinning clears the rotation timer and starts no new one",
         clearCalls === 4 && setCalls === 3, `clear=${clearCalls} set=${setCalls}`);
 
@@ -150,7 +178,7 @@ async function run() {
   const savedSet = win.setInterval;
   win.setInterval = (fn, ms) => { tick = fn; return savedSet.apply(win, [fn, ms]); };
 
-  ws.deliver(display(["ml", "te", "hi"], null, 20));
+  ws2.deliver(display(["ml", "te", "hi"], null, 20));
   check("rotating shows exactly one lane",
         doc.querySelectorAll(".lane").length === 1,
         doc.querySelectorAll(".lane").length);
@@ -170,6 +198,55 @@ async function run() {
         seen[3] === seen[0], seen.join(" -> "));
 
   win.setInterval = savedSet;
+
+  // --- an utterance published during registration must not be lost -------
+  // hub.py adds a client to _clients BEFORE awaiting the history send (see
+  // hub.py:21-22 and tests/test_hub.py's pinned ordering test), so a
+  // `sentence` can legitimately arrive on THIS connection before its own
+  // `history` snapshot. display.js must buffer such events and replay them
+  // on top of history, exactly like view.js already does — otherwise the
+  // empty history that follows wipes every lane's cache and the utterance
+  // vanishes from the wall while /view still shows it.
+  {
+    const { win: freshWin, doc: freshDoc } = await loadPage("/display", { width: 1280, height: 720 });
+    const freshWs = freshWin.__sockets[0];
+    check("fresh display.js connection opened a caption socket", !!freshWs);
+    if (freshWs) {
+      freshWs.onopen();
+      freshWs.deliver(sentence(99, "Mid-join utterance.", true));
+      freshWs.deliver({ type: "history", sentences: [] });
+      freshWs.deliver(display(["en", "ml", "te", "hi"]));
+      const enFlow = freshDoc.querySelector('.lane[data-lang="en"] .lane-flow');
+      check("an utterance published during registration survives history replay",
+            enFlow && enFlow.textContent.includes("Mid-join utterance."),
+            enFlow && enFlow.textContent.trim().slice(-60));
+    }
+  }
+
+  // A fresh /display load mid-service is the common case this guards: the
+  // page's own module-load renderLanes() already built the default four
+  // lanes before any socket message arrives, so when `history` arrives with
+  // a non-empty backlog and the lane SET is unchanged, renderLanes() takes
+  // its "nothing structural changed" early return — the per-flow reset right
+  // after it is what actually loads the backlog into the (already-built,
+  // still-empty) lanes.
+  {
+    const { win: backlogWin, doc: backlogDoc } = await loadPage("/display", { width: 1280, height: 720 });
+    const backlogWs = backlogWin.__sockets[0];
+    check("fresh display.js connection (backlog case) opened a caption socket", !!backlogWs);
+    if (backlogWs) {
+      backlogWs.onopen();
+      backlogWs.deliver({
+        type: "history",
+        sentences: [{ id: 1, en: "Pre-existing backlog sentence.", translations: null, final: true }],
+      });
+      backlogWs.deliver(display(["en", "ml", "te", "hi"]));
+      const enFlow = backlogDoc.querySelector('.lane[data-lang="en"] .lane-flow');
+      check("a fresh connection's non-empty history renders even when the lane set is unchanged",
+            enFlow && enFlow.textContent.includes("Pre-existing backlog sentence."),
+            enFlow && enFlow.textContent.trim().slice(-60));
+    }
+  }
 }
 
 finish(run());

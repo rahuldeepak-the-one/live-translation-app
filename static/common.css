@@ -79,6 +79,17 @@ main::before { content: ""; margin-top: auto; }
 .lane-text span { transition: color 120ms ease-out; }
 .lane-text span.awaiting { color: #6b7c8f; }
 .lane-text span.provisional { opacity: 0.75; }
+/* The newest line on a lane is the one line a reader at the back of the hall
+   is actually looking at. Left to the rules above it is usually BOTH
+   .awaiting (untranslated yet, #6b7c8f) and .provisional (not final,
+   opacity .75) at once, and the two compound to ~3:1 against #0b0f14 — the
+   bare WCAG AA large-text floor. Fix it for that line specifically: never
+   dim it for being provisional, and lighten the awaiting grey just for it.
+   #b8c6d6 solid gives ~11:1, comfortably above AA even for normal-size text.
+   Mirrors (and improves on) view.html's #transcript span.live:not(.awaiting)
+   rule, which never had an awaiting-and-live case to cover on /view. */
+.lane-text span.live { opacity: 1; }
+.lane-text span.live.awaiting { color: #b8c6d6; }
 
 /* A single lane owning the whole wall spends the extra height on MORE HISTORY,
    not larger text: the operator pins a language so someone who looked away can
