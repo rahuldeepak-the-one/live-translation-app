@@ -276,6 +276,39 @@ async function run() {
   }
 
   {
+    // The pending line is grey ENGLISH standing in for a translation that has
+    // not been produced yet. Set at the confirmed size it dominated the card
+    // — three cards each shouting the same Latin sentence over the very
+    // translations they exist to show. Smaller subordinates it to the
+    // confirmed text without hiding it.
+    const { card, section } = mount("te", "తెలుగు");
+    card.render([
+      s(1, "Confirmed.", { translations: { te: LONG_TE } }),
+      s(2, "Still being spoken", { final: false }),
+    ]);
+    const px = (sel) =>
+      parseFloat(getComputedStyle(section.querySelector(sel)).fontSize);
+    const confirmedPx = px(".card-confirmed");
+    const pendingPx = px(".card-pending");
+    check("the pending line is smaller than the confirmed translation",
+          pendingPx < confirmedPx, `pending ${pendingPx} vs confirmed ${confirmedPx}`);
+    check("the pending line is still readable from the back of a hall",
+          pendingPx >= confirmedPx * 0.6,
+          `pending ${pendingPx} vs confirmed ${confirmedPx}`);
+
+    // It must be expressed relative to the confirmed text, not pinned in px:
+    // the fit pass shrinks the card's type and the pending line has to come
+    // down with it or it ends up the biggest thing on an overflowing card.
+    const ratio = pendingPx / confirmedPx;
+    section.style.setProperty("--card-scale", "0.78");
+    const shrunkRatio = px(".card-pending") / px(".card-confirmed");
+    check("the pending line tracks the fit pass's scale",
+          Math.abs(shrunkRatio - ratio) < 0.02,
+          `${ratio.toFixed(3)} -> ${shrunkRatio.toFixed(3)}`);
+    section.style.setProperty("--card-scale", "1");
+  }
+
+  {
     // Re-rendering after a drop must bring the dropped text back in the right
     // place, not append it after the newer sentences.
     const { card, section } = mount("te", "తెలుగు", { width: 520, height: 300 });

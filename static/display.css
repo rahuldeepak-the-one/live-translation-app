@@ -213,9 +213,18 @@ body {
 /* Always its own line below the confirmed block, never inline with it: the
    whole point is that a reader can tell at a glance which text is safe to
    trust. Two lines is enough to show the sentence is still growing without
-   letting it crowd out the translation. */
+   letting it crowd out the translation.
+
+   Smaller than the confirmed text, and in `em` so it tracks --card-scale. The
+   handoff drew this line at the caption size because it assumed in-progress
+   text would be in the target script; it is grey ENGLISH instead, because a
+   sentence still being spoken has deliberately not been translated. At full
+   size three cards each shouted the same Latin sentence over the very
+   translations they exist to show. Subordinate it, do not hide it: its job is
+   to say "the speaker is mid-sentence", not to be read. */
 .card-pending {
   margin-top: 10px;
+  font-size: 0.7em;
   color: var(--text-pending);
   display: -webkit-box;
   -webkit-box-orient: vertical;
