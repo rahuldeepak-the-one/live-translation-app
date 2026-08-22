@@ -59,6 +59,7 @@ Stage 1 is deployable on its own and changes no pipeline code.
 |---|---|---|
 | **1** | Flowing lanes on `/display`, `/control` page with toggles, focus, auto-rotate | None — presentation only |
 | **2** | A sentence (not a chunk) becomes the published unit; `final` becomes a server guarantee | Moderate |
+| **2b** | Grace hold so a breath mid-sentence stops being read as a full stop | Low, but needs instrumentation first |
 | **3** | LLM repair pass inside the hold window | High — new model, VRAM, latency |
 | **4** | Streaming STT (LocalAgreement), original M2 | Moderate; optional |
 
@@ -234,22 +235,60 @@ trailing incomplete sentence stays pending.
 Ids stay monotonic. `HISTORY_SIZE` counts sentences rather than chunks and rises
 accordingly (10 chunks ≈ 30 sentences).
 
-**This does not attempt to fix the spurious-full-stop defect.** Splitting on `.`
-inherits exactly the boundary errors described in Why §1 — "…moral character." /
-"with practical foresight." still splits wrongly, because punctuation alone
-cannot tell a real full stop from one Whisper invented at a chunk edge. Fixing
-that requires reading for meaning, which is stage 3. Stage 2 makes the flow
-smooth and `final` honest; it does not make the boundaries correct.
+**Splitting on `.` alone inherits the boundary errors described in Why §1.** But
+those errors are a timing bug, not a comprehension bug, and are addressed by
+stage 2b below rather than by the stage 3 LLM.
+
+### Stage 2b — the breath problem
+
+Measured on the 2026-08-21 session, comparing chunk duration against whether the
+following chunk began mid-sentence:
+
+```
+BROKEN boundaries (n=15)   median chunk 5.8s   range 0.0-6.9s   >=7s: 0 of 15
+GOOD   boundaries (n=10)   median chunk 7.3s   range 4.5-19.0s  >=7s: 7 of 10
+```
+
+Not one broken boundary came from a chunk longer than 7 seconds. The forced cuts
+at `MAX_BUFFER_S` are safe precisely because they end mid-word with no
+punctuation, so they are already held and joined. The damage comes from short,
+silence-triggered cuts.
+
+The cause is `SILENCE_DURATION_S = 0.6`. That is a breath, not a sentence
+ending. The speaker inhales mid-sentence, `has_trailing_silence()` fires, Whisper
+sees audio ending in silence and adds a confident full stop, and
+`looks_complete()` believes it.
+
+**Fix:** a terminated sentence does not flush immediately. It is held for
+`SENTENCE_GRACE_S` of wall time to see whether speech resumes. Resumes — it was a
+breath, join it. Stays quiet — a real ending, flush. This reuses the hold
+machinery `MAX_SENTENCE_HOLD_S` already provides for unterminated sentences,
+with a much shorter timer, and only costs latency when the speaker has in fact
+stopped talking. Whisper's capitalisation corroborates: all 24 continuation
+chunks in that session began lowercase.
+
+**`SENTENCE_GRACE_S` must not be guessed.** The existing transcript records
+neither the cut reason nor the trailing-silence duration, so the threshold cannot
+be derived from it. Step one is instrumentation — have `should_process()` report
+*why* it cut, and log that with the measured trailing-silence duration and the
+gap to the next speech. Replay a service, then choose the value from the
+distribution, the way every other tuned constant in `config.py` was justified.
+
+Stage 2 makes the flow smooth and `final` honest. Stage 2b makes the boundaries
+correct.
 
 ---
 
 ## Stage 3 — repair pass (sketch)
 
 A small instruct LLM between STT and MT, inside the existing hold window. Input:
-the pending English plus the previous final sentence. Output: corrected English,
-plus a judgement of whether the sentence is actually complete — replacing
-`looks_complete()`'s punctuation guess, and thereby the boundary defect stage 2
-leaves standing.
+the pending English plus the previous final sentence. Output: corrected English
+— the "Trudeness" / "sons of life" class of error, which no amount of timing work
+reaches because it requires knowing what the sermon is about.
+
+Stage 2b, not this, fixes sentence boundaries. If instrumentation shows the grace
+hold leaves a residue of bad boundaries, this pass can also judge completeness
+and replace `looks_complete()` outright — but that is a fallback, not the plan.
 
 It edits the translator's input only. `/display`, `/view` and the transcript keep
 what Whisper heard, exactly as `clean_for_translation()` does today
