@@ -53,3 +53,29 @@ main::before { content: ""; margin-top: auto; }
 .lang-line.pending .lang-text { color: #4b5a6a; font-style: italic; }
 
 .empty-state { color: #4b5a6a; text-align: center; margin: auto; font-size: 1.4rem; }
+
+/* --- Projector lanes (stage 1) --------------------------------------------
+   Each language is an independent flowing paragraph. Lanes divide the wall
+   evenly and never wait for one another, so nothing stalls on screen. */
+.wall { flex: 1; min-height: 0; display: flex; flex-direction: column;
+        gap: 0.5rem; padding: 1rem 1.4rem; }
+.lane { flex: 1; min-height: 0; display: flex; gap: 0.8rem; }
+.lane-tag {
+  flex: 0 0 2.4em; font-size: 0.5em; font-weight: 700; letter-spacing: 0.08em;
+  color: #5b6e83; text-transform: uppercase; padding-top: 0.4em;
+}
+/* Two levels, deliberately: .lane-flow is the SCROLL container (flex column
+   so the ::before trick below anchors growth to the bottom edge, as with
+   main::before above — and for the same reason this MUST NOT be
+   justify-content: flex-end, which makes scrollHeight == clientHeight and
+   the overflow permanently unreachable). .lane-text is Flow's container: a
+   plain block paragraph, so the inline <span>s Flow appends stay inline and
+   the lane reads as flowing prose. If Flow were pointed at .lane-flow itself,
+   every span would become a block-level flex item — one sentence per line,
+   the exact layout this stage exists to eliminate. */
+.lane-flow { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.lane-flow::before { content: ""; display: block; margin-top: auto; }
+.lane-text { line-height: 1.5; }
+.lane-text span { transition: color 120ms ease-out; }
+.lane-text span.awaiting { color: #6b7c8f; }
+.lane-text span.provisional { opacity: 0.75; }

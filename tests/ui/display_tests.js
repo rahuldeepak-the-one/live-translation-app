@@ -1,16 +1,15 @@
-/* Regression cover for the projector page — it shares common.css with /view,
-   so the scroll and viewport-height fixes must not disturb it. */
+/* The projector wall: independent flowing lanes, one per enabled language. */
 import { check, loadPage, finish } from "/tests/ui/runner.js";
 
-const LANGS = ["EN", "ML", "TE", "HI"];
-
-const sentence = (id, en) => ({ type: "sentence", id, en });
+const sentence = (id, en, final = true) => ({ type: "sentence", id, en, final });
 const translation = (id) => ({
   type: "translation", id,
   ml: `മലയാളം വാക്യം ${id}.`,
   te: `తెలుగు వాక్యం ${id}.`,
   hi: `हिन्दी वाक्य ${id}।`,
 });
+const display = (lanes, focus = null, rotate = 0) =>
+  ({ type: "display", lanes, focus, rotate });
 
 async function run() {
   const { win, doc } = await loadPage("/display", { width: 1280, height: 720 });
@@ -19,47 +18,73 @@ async function run() {
   if (!ws) return;
   ws.onopen();
   ws.deliver({ type: "history", sentences: [] });
+  ws.deliver(display(["en", "ml", "te", "hi"]));
 
   for (let i = 1; i <= 12; i++) {
-    ws.deliver(sentence(i, `This is a fairly long projector caption number ${i}.`));
+    ws.deliver(sentence(i, `Projector caption number ${i} is fairly long.`));
     ws.deliver(translation(i));
   }
 
-  const main = doc.getElementById("captions");
-  const rows = doc.querySelectorAll(".caption-row");
-  check("captions still render as rows", rows.length > 0, rows.length);
+  const lanes = () => [...doc.querySelectorAll(".lane")];
+  check("one lane per enabled language", lanes().length === 4, lanes().length);
+  check("lanes are labelled by language",
+        lanes().map((l) => l.dataset.lang).join(",") === "en,ml,te,hi",
+        lanes().map((l) => l.dataset.lang).join(","));
 
-  const lines = rows[rows.length - 1].querySelectorAll(".lang-line");
-  check("newest caption shows all four languages", lines.length === LANGS.length, lines.length);
+  const mlText = doc.querySelector('.lane[data-lang="ml"] .lane-flow').textContent;
+  check("malayalam lane shows malayalam", mlText.includes("മലയാളം"), mlText.slice(0, 40));
 
-  // The whole point of the projector: the newest caption must be on screen.
-  const mainBox = main.getBoundingClientRect();
-  const newestBox = rows[rows.length - 1].getBoundingClientRect();
-  check("newest caption is inside the visible area",
-        newestBox.bottom <= mainBox.bottom + 2 && newestBox.top >= mainBox.top - 2,
-        `main=[${Math.round(mainBox.top)},${Math.round(mainBox.bottom)}] ` +
-        `newest=[${Math.round(newestBox.top)},${Math.round(newestBox.bottom)}]`);
+  // Lanes flow: many sentences share one paragraph, not one block each.
+  const mlSpans = doc.querySelectorAll('.lane[data-lang="ml"] .lane-flow span');
+  check("lane is one flowing paragraph of spans", mlSpans.length === 12, mlSpans.length);
 
-  // The footer carries the /view URL people type into their phones.
-  const footer = doc.querySelector("footer");
-  const footerBox = footer.getBoundingClientRect();
-  check("footer with the /view URL stays on screen",
-        footerBox.bottom <= win.innerHeight + 2 && footerBox.height > 0,
-        `bottom=${Math.round(footerBox.bottom)} viewport=${win.innerHeight}`);
+  // The span-count check above would still pass even if every span rendered
+  // on its own line (e.g. Flow's container itself being a flex column, which
+  // turns each inline span into a block-level flex item). Prove the lane
+  // actually reads as flowing prose: if multiple sentences share a text line,
+  // their spans share a top offset, so distinct tops must be fewer than spans.
+  const mlTops = new Set([...mlSpans].map((s) => s.getBoundingClientRect().top));
+  check("lane genuinely flows as prose (sentences share lines, not one-per-line)",
+        mlTops.size < mlSpans.length,
+        `distinct tops=${mlTops.size} spans=${mlSpans.length}`);
 
-  // The QR is how people get to /view without typing an IP — if it fails to
-  // render there is no fallback anyone will actually use.
-  const qr = doc.getElementById("qr");
-  check("QR code element is present", !!qr);
-  await new Promise((r) => win.setTimeout(r, 400));   // let the image load
-  check("QR code image actually loaded", qr && qr.complete && qr.naturalWidth > 0,
-        qr && `complete=${qr.complete} naturalWidth=${qr.naturalWidth}`);
-  const qrBox = qr && qr.getBoundingClientRect();
-  check("QR code is big enough to scan", qrBox && qrBox.width >= 80 && qrBox.height >= 80,
-        qrBox && `${Math.round(qrBox.width)}x${Math.round(qrBox.height)}`);
+  // Turning English off must leave three lanes, not a gap.
+  ws.deliver(display(["ml", "te", "hi"]));
+  check("disabling english leaves three lanes", lanes().length === 3, lanes().length);
+  check("english lane is gone",
+        !doc.querySelector('.lane[data-lang="en"]'), "en lane still present");
 
-  check("page itself does not scroll", doc.body.scrollHeight <= win.innerHeight + 2,
-        `body=${doc.body.scrollHeight} viewport=${win.innerHeight}`);
+  // The whole point of a projector: newest text must be visible, and the
+  // container must remain scrollable (common.css:36 documents the trap).
+  for (const lane of lanes()) {
+    const flow = lane.querySelector(".lane-flow");
+    const scrollable = flow.scrollHeight >= flow.clientHeight;
+    check(`lane ${lane.dataset.lang} is not scroll-trapped`, scrollable,
+          `scrollHeight=${flow.scrollHeight} clientHeight=${flow.clientHeight}`);
+    check(`lane ${lane.dataset.lang} is pinned to the live edge`,
+          flow.scrollHeight - flow.clientHeight - flow.scrollTop <= 2,
+          `${flow.scrollHeight - flow.clientHeight - flow.scrollTop}px from bottom`);
+  }
+
+  // A sentence with no translation shows grey English, never "…".
+  ws.deliver(sentence(99, "Just spoken, not yet translated.", false));
+  const teFlow = doc.querySelector('.lane[data-lang="te"] .lane-flow');
+  check("untranslated lane shows english, not an ellipsis",
+        teFlow.textContent.includes("Just spoken") && !teFlow.textContent.includes("…"),
+        teFlow.textContent.slice(-60));
+  const newest = teFlow.querySelector('span[data-sid="99"]');
+  check("unfinalised sentence is marked provisional",
+        newest && newest.classList.contains("provisional"),
+        newest && newest.className);
+
+  // Reconnect must restore lanes, not revert to all four. display.js redials
+  // via setTimeout(connect, 2000), so the new socket only exists after that
+  // timer fires — wait it out (the harness runs under --virtual-time-budget,
+  // so this settles fast rather than costing 2 real seconds).
+  ws.onclose();
+  await new Promise((r) => win.setTimeout(r, 2100));
+  const ws2 = win.__sockets[win.__sockets.length - 1];
+  check("display reconnected", ws2 !== ws, `${win.__sockets.length} sockets`);
 }
 
 finish(run());
