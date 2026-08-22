@@ -140,6 +140,36 @@ async function run() {
 
   win.setInterval = realSet;
   win.clearInterval = realClear;
+
+  // --- a rotation tick must actually move the wall -----------------------
+  // nextLane is covered above as a pure function, but nothing verified the
+  // setInterval callback wires it to the DOM. A broken callback leaves all four
+  // nextLane checks green while the wall silently never rotates. Capturing the
+  // callback and calling it is synchronous, so no real timer is needed.
+  let tick = null;
+  const savedSet = win.setInterval;
+  win.setInterval = (fn, ms) => { tick = fn; return savedSet.apply(win, [fn, ms]); };
+
+  ws.deliver(display(["ml", "te", "hi"], null, 20));
+  check("rotating shows exactly one lane",
+        doc.querySelectorAll(".lane").length === 1,
+        doc.querySelectorAll(".lane").length);
+  check("a rotating display message installed a tick callback", typeof tick === "function");
+
+  const seen = [];
+  for (let i = 0; i < 4; i++) {
+    seen.push(doc.querySelector(".lane").dataset.lang);
+    tick();
+  }
+  check("each rotation tick advances the wall to a different language",
+        seen[0] !== seen[1] && seen[1] !== seen[2] && seen[2] !== seen[3],
+        seen.join(" -> "));
+  check("rotation only ever shows enabled lanes",
+        seen.every((l) => ["ml", "te", "hi"].includes(l)), seen.join(","));
+  check("rotation cycles rather than running off the end",
+        seen[3] === seen[0], seen.join(" -> "));
+
+  win.setInterval = savedSet;
 }
 
 finish(run());
