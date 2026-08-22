@@ -79,3 +79,8 @@ main::before { content: ""; margin-top: auto; }
 .lane-text span { transition: color 120ms ease-out; }
 .lane-text span.awaiting { color: #6b7c8f; }
 .lane-text span.provisional { opacity: 0.75; }
+
+/* A single lane owning the whole wall spends the extra height on MORE HISTORY,
+   not larger text: the operator pins a language so someone who looked away can
+   read back, which bigger type would defeat. */
+.wall.focused .lane-tag { flex-basis: 3.2em; font-size: 0.45em; }

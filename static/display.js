@@ -28,12 +28,53 @@ els.viewUrl.textContent = `http://${window.location.host}/view`;
 
 /* ------------------------------------------------------------------- lanes */
 
+// rotationLane/rotationTimer must be declared before visibleLanes() — it
+// reads rotationLane, and renderLanes() (which calls visibleLanes()) runs at
+// module load, below. A `let` declared after that first call would still be
+// in its temporal dead zone and throw a ReferenceError.
+let rotationLane = null;
+let rotationTimer = null;
+
+/* Which lanes to paint right now. Focus and rotation are mutually exclusive
+   modes — see the spec's state model. Rotation is advanced by THIS page on its
+   own timer, so the server needs no timer and broadcasts nothing per step. */
 function visibleLanes() {
-  return state.display.lanes;
+  const { lanes, focus, rotate } = state.display;
+  if (rotate > 0) return [rotationLane];
+  if (focus && lanes.includes(focus)) return [focus];
+  return lanes;
+}
+
+/* Exported onto window for the browser suite; pure, so it is worth testing. */
+export function nextLane(lanes, current) {
+  if (!lanes.length) return null;
+  const i = lanes.indexOf(current);
+  // indexOf -1 (nothing current, or the current lane was just disabled) gives
+  // 0 here, which is the right recovery: restart at the first lane.
+  return lanes[(i + 1) % lanes.length];
+}
+window.nextLane = nextLane;
+
+function applyRotation() {
+  clearInterval(rotationTimer);
+  rotationTimer = null;
+  const { lanes, rotate } = state.display;
+  if (rotate <= 0) {
+    rotationLane = null;
+    return;
+  }
+  if (!lanes.includes(rotationLane)) rotationLane = nextLane(lanes, null);
+  rotationTimer = setInterval(() => {
+    rotationLane = nextLane(state.display.lanes, rotationLane);
+    renderLanes();
+  }, rotate * 1000);
 }
 
 function renderLanes() {
   const wanted = visibleLanes();
+  // Set before the early return so the class tracks the mode (focused vs.
+  // not) even on ticks where the visible lane SET happens not to change.
+  els.wall.classList.toggle("focused", wanted.length === 1);
   const current = [...flows.keys()];
   if (current.join(",") === wanted.join(",")) return;   // nothing structural changed
 
@@ -133,6 +174,7 @@ function connect() {
     } else if (msg.type === "display") {
       const { type, ...display } = msg;
       state.display = display;
+      applyRotation();
       renderLanes();
     } else if (msg.type === "sentence") {
       applyToLanes(remember({ id: msg.id, en: msg.en, final: msg.final }));

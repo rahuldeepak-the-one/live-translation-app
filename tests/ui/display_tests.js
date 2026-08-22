@@ -85,6 +85,36 @@ async function run() {
   await new Promise((r) => win.setTimeout(r, 2100));
   const ws2 = win.__sockets[win.__sockets.length - 1];
   check("display reconnected", ws2 !== ws, `${win.__sockets.length} sockets`);
+  // --- focus -------------------------------------------------------------
+  ws.deliver(display(["en", "ml", "te", "hi"], "ml", 0));
+  check("focus renders exactly one lane", lanes().length === 1, lanes().length);
+  check("the focused lane is the requested one",
+        lanes()[0].dataset.lang === "ml", lanes()[0].dataset.lang);
+  check("wall is marked focused",
+        doc.getElementById("wall").classList.contains("focused"), "no .focused");
+
+  const focusedFlow = doc.querySelector('.lane[data-lang="ml"] .lane-flow');
+  check("focused lane still holds the backlog",
+        focusedFlow.querySelectorAll("span").length >= 12,
+        focusedFlow.querySelectorAll("span").length);
+
+  // Leaving focus must restore lanes that are already full, not blank ones.
+  ws.deliver(display(["en", "ml", "te", "hi"], null, 0));
+  check("leaving focus restores every lane", lanes().length === 4, lanes().length);
+  const restored = doc.querySelector('.lane[data-lang="te"] .lane-flow');
+  check("restored lane is not blank",
+        restored.textContent.includes("తెలుగు"), restored.textContent.slice(0, 30));
+
+  // --- rotation ----------------------------------------------------------
+  const { nextLane } = win;
+  check("rotation advances through the lanes",
+        nextLane(["ml", "te", "hi"], "ml") === "te", nextLane(["ml", "te", "hi"], "ml"));
+  check("rotation wraps",
+        nextLane(["ml", "te", "hi"], "hi") === "ml", nextLane(["ml", "te", "hi"], "hi"));
+  check("rotation starts at the first lane when nothing is current",
+        nextLane(["ml", "te", "hi"], null) === "ml", nextLane(["ml", "te", "hi"], null));
+  check("rotation survives the current lane being disabled",
+        nextLane(["ml", "hi"], "te") === "ml", nextLane(["ml", "hi"], "te"));
 }
 
 finish(run());
