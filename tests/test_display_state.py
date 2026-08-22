@@ -45,6 +45,15 @@ def test_rotate_bounds_accepted(rotate):
     assert validate({"lanes": ["ml", "te"], "rotate": rotate})["rotate"] == rotate
 
 
+@pytest.mark.parametrize("rotate", [True, False])
+def test_booleans_are_not_valid_rotate_values(rotate):
+    # bool subclasses int, so False (== 0) would otherwise pass as "disabled"
+    # and True (== 1) is only caught by the range check by accident. The guard
+    # in _clean_rotate exists for this; without these cases nothing proves it.
+    with pytest.raises(ValueError):
+        validate({"lanes": ["ml"], "rotate": rotate})
+
+
 def test_focus_on_a_disabled_language_is_cleared_not_rejected():
     # Repairing rather than raising: the operator disabling the focused lane is
     # an ordinary action, and blanking the wall over it would be worse than
