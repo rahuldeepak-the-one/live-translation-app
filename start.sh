@@ -49,6 +49,11 @@ else:
     print('⚠️  No CUDA GPU found — running on CPU (will be slower)')
 "
 
+# --- Operator control token ---
+# New every run, so a token seen once is useless next Sunday. Exported so the
+# banner below and the server itself agree on it.
+export CONTROL_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(3))')"
+
 # --- Show the URLs people should open ---
 # Not `hostname -I | awk '{print $1}'`: this machine has a dozen addresses
 # (docker bridges, k3s/flannel, a VPN tunnel) and that would happily print an

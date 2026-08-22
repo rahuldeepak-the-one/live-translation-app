@@ -65,7 +65,7 @@ def current_ssid(nmcli_output):
     return None
 
 
-def startup_banner(port, route_output, addr_output, nmcli_output=""):
+def startup_banner(port, route_output, addr_output, nmcli_output="", control_token=""):
     """The block start.sh prints. Names the WiFi, because the usual failure is
     a phone sitting on a different network and no way to tell."""
     urls = service_urls(port, route_output, addr_output)
@@ -78,8 +78,10 @@ def startup_banner(port, route_output, addr_output, nmcli_output=""):
         f"\U0001f4fa Projector/tablet:  {primary}/display",
         f"\U0001f4f1 Personal phones:   {primary}/view",
         f"\U0001f3a4 Microphone page:   {primary}/mic",
-        "",
     ]
+    if control_token:
+        lines.append(f"\U0001f39b\ufe0f  Operator control:  {primary}/control/{control_token}")
+    lines.append("")
     ssid = current_ssid(nmcli_output)
     if ssid:
         lines.append(f"   Phones MUST be on this WiFi:  {ssid}")
@@ -106,16 +108,19 @@ def local_urls(port):
                         _run("ip", "-o", "-4", "addr", "show"))
 
 
-def local_banner(port):
+def local_banner(port, control_token=""):
     return startup_banner(
         port,
         _run("ip", "route", "get", "1.1.1.1"),
         _run("ip", "-o", "-4", "addr", "show"),
         _run("nmcli", "-t", "-f", "active,ssid", "dev", "wifi"),
+        control_token,
     )
 
 
 if __name__ == "__main__":
+    import os
     import sys
     from config import PORT          # single source of truth for the port
-    print(local_banner(int(sys.argv[1]) if len(sys.argv) > 1 else PORT))
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else PORT
+    print(local_banner(port, os.environ.get("CONTROL_TOKEN", "")))

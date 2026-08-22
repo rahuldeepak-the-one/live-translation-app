@@ -10,11 +10,13 @@ Routes:
 """
 import json
 import logging
+import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -30,6 +32,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# The /view address is QR-coded for the whole congregation, so /control must not
+# be reachable by guessing from it. start.sh generates the token so it can print
+# it in the startup banner before the server boots; running server.py directly
+# generates one and logs it.
+#
+# This is obscurity, not authentication. It stops a bored teenager on the church
+# WiFi. It does not stop anyone who can read the operator's screen or this log.
+_CONTROL_TOKEN = os.environ.get("CONTROL_TOKEN") or secrets.token_hex(3)
+
+
+def control_token():
+    return _CONTROL_TOKEN
 
 
 def _fallback_view_url():
@@ -122,7 +137,20 @@ def create_app(stt=None, translator=None, transcript=None):
         logger.info("Screen connected (%d total).", len(hub._clients))
         try:
             while True:
-                await ws.receive_text()  # keepalive/no-op; raises on disconnect
+                # Screens are read-only; only /control sends anything, and it
+                # always sends a COMPLETE state, so there is nothing to merge.
+                raw = await ws.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(msg, dict) or msg.get("type") != "display":
+                    continue
+                try:
+                    await hub.publish_display(msg)
+                except ValueError:
+                    # A malformed control message must never blank the wall.
+                    logger.warning("Rejected control state: %r", msg)
         except WebSocketDisconnect:
             pass
         finally:
@@ -148,6 +176,15 @@ def create_app(stt=None, translator=None, transcript=None):
             media_type="image/svg+xml",
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.get("/control/{token}")
+    async def control_page(token: str):
+        # compare_digest, and an identical 404 either way: a wrong token must be
+        # indistinguishable from a path that was never a page, so the endpoint
+        # cannot be probed.
+        if not secrets.compare_digest(token, _CONTROL_TOKEN):
+            raise HTTPException(status_code=404)
+        return FileResponse(STATIC_DIR / "control.html")
 
     @app.get("/display")
     async def display_page():

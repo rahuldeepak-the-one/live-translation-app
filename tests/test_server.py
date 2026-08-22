@@ -1,6 +1,7 @@
 import numpy as np
 from fastapi.testclient import TestClient
 
+import server as server_module
 from server import create_app
 from tests.test_pipeline import StubSTT, StubTranslator
 from config import SAMPLE_RATE
@@ -153,3 +154,24 @@ def test_qr_falls_back_when_the_host_header_is_junk():
 def test_display_page_shows_the_qr():
     client = make_client()
     assert '/qr.svg' in client.get("/display").text
+
+
+def test_control_page_served_for_the_generated_token():
+    client = make_client()
+    token = server_module.control_token()
+    assert client.get(f"/control/{token}").status_code == 200
+
+
+def test_wrong_control_token_is_indistinguishable_from_a_missing_page():
+    client = make_client()
+    real = client.get("/control/definitely-not-the-token")
+    absent = client.get("/control/")
+    assert real.status_code == 404
+    assert absent.status_code == 404
+
+
+def test_control_token_is_not_guessable_from_the_public_pages():
+    client = make_client()
+    token = server_module.control_token()
+    for path in ("/display", "/view", "/qr.svg"):
+        assert token not in client.get(path).text

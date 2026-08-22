@@ -96,3 +96,13 @@ def test_banner_flags_other_addresses_as_alternates():
 def test_banner_warns_when_nothing_is_reachable():
     banner = startup_banner(8080, "", "1: lo    inet 127.0.0.1/8 scope host lo\\  x", "")
     assert "no network" in banner.lower()
+
+
+def test_banner_prints_the_control_url_when_a_token_is_supplied():
+    banner = startup_banner(8080, ROUTE, ADDRS, control_token="7f3a9c")
+    assert "/control/7f3a9c" in banner
+
+
+def test_banner_omits_control_line_without_a_token():
+    banner = startup_banner(8080, ROUTE, ADDRS)
+    assert "/control" not in banner
