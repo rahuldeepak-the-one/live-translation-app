@@ -103,8 +103,21 @@ new message type, not a change to this one.
 
 - `lanes` — enabled languages, in wall order. Any subset of `["en","ml","te","hi"]`.
 - `focus` — `null` for all lanes, or a language code pinned full-wall.
-- `rotate` — seconds between auto-rotate steps; `0` disables. Ignored when
-  `focus` is non-null.
+- `rotate` — seconds between auto-rotate steps; `0` disables.
+
+The three modes are mutually exclusive, which keeps the state unambiguous:
+
+```
+rotate == 0, focus == null    ->  all enabled lanes, stacked
+rotate == 0, focus == "ml"    ->  ml pinned, full wall
+rotate >  0                   ->  rotating
+```
+
+Setting `rotate > 0` forces `focus` to `null` server-side, and the **display**
+advances the rotation locally on its own timer. The server runs no timer and
+broadcasts nothing per rotation step — otherwise a server-side `focus` would
+fight the display's position, and a 20-second rotation would put a broadcast
+storm on the same socket carrying captions.
 
 The hub retains the latest `display` state and replays it on `register()`
 alongside `history`, so a wall that drops WiFi mid-service reconnects to the
