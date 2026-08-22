@@ -63,6 +63,9 @@ body {
   align-items: center;
   gap: 22px;
   padding: 14px 36px 12px;
+  /* Pinned so the cards do not jump down by a few pixels when the English
+     line appears with the service's first caption. */
+  min-height: 57px;
 }
 
 .live {

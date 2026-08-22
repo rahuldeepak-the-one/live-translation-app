@@ -54,56 +54,7 @@ main::before { content: ""; margin-top: auto; }
 
 .empty-state { color: #4b5a6a; text-align: center; margin: auto; font-size: 1.4rem; }
 
-/* --- Projector lanes (stage 1) --------------------------------------------
-   Each language is an independent flowing paragraph. Lanes divide the wall
-   evenly and never wait for one another, so nothing stalls on screen. */
-.wall { flex: 1; min-height: 0; display: flex; flex-direction: column;
-        gap: 0.5rem; padding: 1rem 1.4rem; }
-.lane { flex: 1; min-height: 0; display: flex; gap: 0.8rem; }
-.lane-tag {
-  flex: 0 0 2.4em; font-size: 0.5em; font-weight: 700; letter-spacing: 0.08em;
-  color: #5b6e83; text-transform: uppercase; padding-top: 0.4em;
-}
-/* Two levels, deliberately: .lane-flow is the SCROLL container (flex column
-   so the ::before trick below anchors growth to the bottom edge, as with
-   main::before above — and for the same reason this MUST NOT be
-   justify-content: flex-end, which makes scrollHeight == clientHeight and
-   the overflow permanently unreachable). .lane-text is Flow's container: a
-   plain block paragraph, so the inline <span>s Flow appends stay inline and
-   the lane reads as flowing prose. If Flow were pointed at .lane-flow itself,
-   every span would become a block-level flex item — one sentence per line,
-   the exact layout this stage exists to eliminate. */
-.lane-flow { flex: 1; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; }
-.lane-flow::before { content: ""; display: block; margin-top: auto; }
-.lane-text { line-height: 1.5; }
-.lane-text span { transition: color 120ms ease-out; }
-.lane-text span.awaiting { color: #6b7c8f; }
-.lane-text span.provisional { opacity: 0.75; }
-/* The newest line on a lane is the one line a reader at the back of the hall
-   is actually looking at. Left to the rules above it is usually BOTH
-   .awaiting (untranslated yet, #6b7c8f) and .provisional (not final,
-   opacity .75) at once, and the two compound to ~3:1 against #0b0f14 — the
-   bare WCAG AA large-text floor. Fix it for that line specifically: never
-   dim it for being provisional, and lighten the awaiting grey just for it.
-   #b8c6d6 solid gives ~11:1, comfortably above AA even for normal-size text.
-   Mirrors (and improves on) view.html's #transcript span.live:not(.awaiting)
-   rule, which never had an awaiting-and-live case to cover on /view. */
-.lane-text span.live { opacity: 1; }
-.lane-text span.live.awaiting { color: #b8c6d6; }
-/* ...but not so far that `final` stops meaning anything. A bare
-   `.live { opacity: 1 }` overrides .provisional entirely, so the newest line —
-   the ONLY line that is ever provisional — rendered identically whether the
-   server could still revise it or had frozen it. That silently discards the
-   whole grey-may-change / solid-never-will contract on the one line it applies
-   to. 0.9 restores a visible step while staying far above the AA floor.
-   Measured in Chrome against #0b0f14, transitions disabled:
-       awaiting  (grey English standing in)  frozen 11.06:1  provisional  9.08:1
-       translated                            frozen 16.45:1  provisional 13.35:1
-   Do not read these with getComputedStyle right after a class change — the
-   `transition: color` above means you get the pre-change colour. */
-.lane-text span.live.provisional { opacity: 0.9; }
-
-/* A single lane owning the whole wall spends the extra height on MORE HISTORY,
-   not larger text: the operator pins a language so someone who looked away can
-   read back, which bigger type would defeat. */
-.wall.focused .lane-tag { flex-basis: 3.2em; font-size: 0.45em; }
+/* Projector lane styles used to live here. The wall is now a card grid with
+   its own light/dark tokens and owns its whole stylesheet — see
+   static/display.css. This file stays dark on purpose: /view and /control are
+   read on phones, often in a dark hall, and must not follow the wall. */

@@ -4,30 +4,54 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Live Translation — Display</title>
-  <link rel="stylesheet" href="/static/common.css">
-  <style>
-    main { font-size: clamp(1.4rem, 3.4vw, 2.6rem); }
-    footer { padding: 0.6rem 1.2rem; color: #7d8fa3; font-size: 0.95rem;
-             border-top: 1px solid #1c2733; display: flex; gap: 1rem;
-             align-items: center; justify-content: center; }
-    #qr { width: 92px; height: 92px; background: #fff; padding: 4px;
-          border-radius: 6px; flex: 0 0 auto; }
-    footer strong { color: #e8eef5; }
-  </style>
+  <script>
+    /* Paint-blocking on purpose. A module script is deferred, so without this
+       a dark-themed hall gets a white flash across the projector on every
+       load. theme.js re-runs the decision properly the moment it executes —
+       validating the value and falling back to light — so this is a fast path,
+       not a second source of truth. */
+    try {
+      document.documentElement.dataset.theme =
+        new URLSearchParams(location.search).get("theme")
+        || localStorage.getItem("theme") || "light";
+    } catch (e) {
+      document.documentElement.dataset.theme = "light";
+    }
+  </script>
+  <link rel="stylesheet" href="/static/display.css">
 </head>
 <body>
-  <header>
-    <span><span id="status-dot"></span><span id="status-text">connecting…</span></span>
-    <span>Live Translation</span>
+  <header class="wall-header">
+    <span class="live" id="live" data-state="down">
+      <span class="live-dot"></span><span id="live-label">CONNECTING</span>
+    </span>
+    <span class="en-bar" id="en-bar" hidden>
+      <span class="en-label">English</span>
+      <p class="en-text" id="en-text"></p>
+    </span>
+    <button class="theme-toggle" id="theme-toggle" type="button"
+            aria-label="Switch to dark theme">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"></path>
+      </svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path>
+      </svg>
+    </button>
   </header>
-  <main id="captions">
-    <div class="empty-state" id="empty">Waiting for the speaker…</div>
-    <div class="wall" id="wall"></div>
-  </main>
-  <footer>
-    <img id="qr" src="/qr.svg" alt="QR code to the phone page">
-    <span>Scan, or type <strong id="view-url"></strong> on your phone</span>
+
+  <div class="grid" id="grid" data-cards="0"></div>
+
+  <!-- No address in text. The QR carries it; printing an IP on the wall puts
+       a technical string in front of the whole congregation. -->
+  <footer class="wall-footer">
+    <span>Scan for phone captions</span>
+    <img class="qr" src="/qr.svg" alt="QR code to the phone captions page">
   </footer>
+
   <script type="module" src="/static/display.js"></script>
 </body>
 </html>
