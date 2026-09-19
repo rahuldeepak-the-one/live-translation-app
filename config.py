@@ -81,7 +81,9 @@ NO_SPEECH_PROB_MAX = 0.6      # Whisper's own "this isn't speech" score
 # -2.0 rather than off: ~97% of the available gain, while still flooring total
 # garbage for conditions synthetic noise does not reproduce (a conversation in
 # the next room, music through a wall). Repetition has its own, better-aimed
-# filter in COMPRESSION_RATIO_MAX = 2.2   # drop repetition collapse ("eh, eh, eh, eh")
+# filter in COMPRESSION_RATIO_MAX below.
+AVG_LOGPROB_MIN = -2.0        # drop only catastrophically bad decodes
+COMPRESSION_RATIO_MAX = 2.2   # drop repetition collapse ("eh, eh, eh, eh")
 
 # Phrases Whisper learned from YouTube outros. Deliberately conservative: bare
 # "Thank you." is NOT here, because a speaker genuinely says it — that case is
@@ -149,15 +151,14 @@ WHISPER_HOTWORDS = (
     # Budget: hotwords are truncated at max_length//2 - 1 = 223 tokens and the
     # tail is dropped SILENTLY. Re-measure before adding more.
     "Pharaoh Moses Aaron Egypt Israel Israelites Nile Sinai Canaan Jordan "
-    "Abraham Isaac Jacob Joseph Joshua David Solomon Elijah Elisha Noah "
-    "Jonah Nineveh Daniel Esther Ruth Job Babylon Jerusalem Bethlehem "
+    "Abraham Isaac Jacob Joseph David Solomon Elijah Elisha Noah "
+    "Jonah Nineveh Esther Ruth Job Babylon Jerusalem Bethlehem "
     "Galilee Nazareth Passover Pentecost Calvary Bible Christian "
     # Jonah, evidenced: "fled to Tarshish" was transcribed "pled to
     # Tarshes" on 2026-08-30, and all three languages then faithfully
     # translated the wrong proper noun.
     "Tarshish Joppa Samaria Gethsemane Golgotha Zion"
 )
-
 
 # --- Sentence assembly (translation side only) ---
 # The screens get English the moment Whisper produces it, but a fragment must
