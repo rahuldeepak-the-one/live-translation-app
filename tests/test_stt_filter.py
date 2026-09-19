@@ -16,7 +16,9 @@ def test_high_no_speech_probability_is_dropped():
 
 
 def test_low_confidence_is_dropped():
-    assert keep_segment(**seg("Veghurt's costave", avg_logprob=-1.6)) is False
+    # Boundary moved -1.6 -> -2.4 on 2026-09-20: at -1.6 this was also throwing
+    # away real accented speech. See AVG_LOGPROB_MIN in config.py for the sweep.
+    assert keep_segment(**seg("Veghurt's costave", avg_logprob=-2.4)) is False
 
 
 def test_repetition_loop_is_dropped():
@@ -72,3 +74,46 @@ def test_amen_and_hallelujah_are_not_filler():
 def test_bare_thank_you_is_still_kept():
     """config.py deliberately excludes it: a preacher genuinely says it."""
     assert keep_segment(**seg("Thank you.")) is True
+
+
+# --- Accented speech is low-confidence speech, not hallucination -------------
+# Measured 2026-09-20 on 120 NPTEL clips (Indian-English lectures), running the
+# real WhisperSTT. AVG_LOGPROB_MIN = -1.0 was discarding 364 of the 514 words
+# the model produced -- 71% of real content -- because an accent lowers
+# confidence exactly the way a hallucination does. Corpus WER against the
+# reference, sweeping the threshold and leaving every other filter untouched:
+#
+#   -0.8   91.8%      -1.4   70.3%      -2.0   65.9%
+#   -1.0   85.6%  <-- was   -1.6   67.7%      -3.0   65.5%
+#   -1.2   77.0%      -1.8   66.1%      off    65.5%
+#
+# Monotonic: the threshold never once paid for itself. And it is not what
+# guards against noise — fed digital silence, fan noise at the measured floor
+# (RMS 3806) and white hiss, the model emits NOTHING, because Silero VAD stops
+# it long before any score is read. Nor did it catch the hallucination actually
+# observed in this church: "Thank you." 39 times on 2026-08-23, which is
+# high-confidence and sailed through.
+#
+# -2.0 rather than off: it captures ~97% of the available gain and still floors
+# total garbage, for conditions no synthetic noise reproduces (a distant
+# conversation, music through a wall).
+
+def test_accented_speech_is_not_mistaken_for_hallucination():
+    """Real sentences from the measured run, at the confidence an accent produces."""
+    assert keep_segment(**seg("if you remember right in the first week",
+                              avg_logprob=-1.134)) is True
+    assert keep_segment(**seg("do at the end of this course",
+                              avg_logprob=-1.071)) is True
+    assert keep_segment(**seg("to be noted", avg_logprob=-1.07)) is True
+
+
+
+def test_repetition_is_caught_by_compression_not_confidence():
+    """The garbage the old threshold caught has its own, better-aimed filter.
+
+    "is legally is legally is legally" scored -1.338 and was dropped for
+    confidence. Its compression ratio condemns it on its own merits, so
+    relaxing the confidence floor does not let it back in.
+    """
+    assert keep_segment(**seg("is legally is legally is legally is legally",
+                              avg_logprob=-1.338, compression_ratio=2.6)) is False

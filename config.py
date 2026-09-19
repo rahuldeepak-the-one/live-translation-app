@@ -1,7 +1,26 @@
 """Central configuration — every tunable lives here."""
 
 # --- Models ---
-WHISPER_MODEL = "distil-large-v3"          # English-only distilled Whisper
+# English-only distilled Whisper. v3.5 is the same 756M architecture and the
+# same VRAM as v3, distilled from 4x more data (98k hours) with a longer
+# schedule, so it is a drop-in swap — only this string changes.
+#
+# Measured here 2026-09-19, 60 LibriSpeech test-clean utterances (1275 words),
+# clean and under noise shaped to 82% of its energy below 300Hz to stand in for
+# this laptop's fans:
+#            clean      10dB SNR   5dB SNR
+#   v3       1.88%      1.96%      2.12%
+#   v3.5     1.73%      1.88%      1.73%
+# Better in all three, and it barely degrades under noise while v3 gets steadily
+# worse — which matters more in this room than the clean figure does.
+#
+# Read those deltas as a direction, not a magnitude: 22-27 errors on 1275 words
+# is a small count, and LibriSpeech is clean read American English while the
+# real input is live Indian-English preaching through a mixer. The honest test
+# is a recorded service; this is the best evidence available without one.
+#
+# ROLLBACK IS THIS ONE LINE: "distil-large-v3" is still in the HF cache.
+WHISPER_MODEL = "distil-whisper/distil-large-v3.5-ct2"
 TRANSLATOR_BACKEND = "indictrans2"          # "indictrans2" | "nllb"
 INDICTRANS2_MODEL = "ai4bharat/indictrans2-en-indic-dist-200M"
 NLLB_MODEL = "facebook/nllb-200-distilled-600M"
@@ -43,8 +62,26 @@ PORT = 8080
 # when handed silence or hiss. AudioBuffer.has_speech() is the first line of
 # defence; these are the second, applied per Whisper segment.
 NO_SPEECH_PROB_MAX = 0.6      # Whisper's own "this isn't speech" score
-AVG_LOGPROB_MIN = -1.0        # drop low-confidence decodes (mangled proper nouns)
-COMPRESSION_RATIO_MAX = 2.2   # drop repetition collapse ("eh, eh, eh, eh")
+# An ACCENT LOWERS CONFIDENCE THE SAME WAY A HALLUCINATION DOES, so this
+# threshold cannot tell them apart — and at -1.0 it was discarding 364 of the
+# 514 words the model produced (71% of real content) on Indian-English speech.
+# Measured 2026-09-20 over 120 NPTEL lecture clips; corpus WER vs reference,
+# sweeping this value and touching nothing else:
+#     -0.8  91.8%      -1.4  70.3%      -2.0  65.9%
+#     -1.0  85.6% <-- was    -1.6  67.7%      off   65.5%
+#     -1.2  77.0%      -1.8  66.1%
+# Monotonic. The threshold never once paid for itself.
+#
+# It is also NOT what protects against noise, which was the reason it existed.
+# Fed digital silence, fan noise at this laptop's measured floor (RMS 3806) and
+# white hiss, the model emits nothing at all — Silero VAD stops it before any
+# score is read. And it never caught the hallucination this church actually
+# got: "Thank you." 39 times on 2026-08-23, high-confidence, straight through.
+#
+# -2.0 rather than off: ~97% of the available gain, while still flooring total
+# garbage for conditions synthetic noise does not reproduce (a conversation in
+# the next room, music through a wall). Repetition has its own, better-aimed
+# filter in COMPRESSION_RATIO_MAX = 2.2   # drop repetition collapse ("eh, eh, eh, eh")
 
 # Phrases Whisper learned from YouTube outros. Deliberately conservative: bare
 # "Thank you." is NOT here, because a speaker genuinely says it — that case is
@@ -94,8 +131,29 @@ WHISPER_HOTWORDS = (
     "James Peter Jude Revelation "
     "grace mercy righteousness repentance salvation redemption sanctification "
     "covenant testimony scripture gospel disciple apostle prophecy anointing "
-    "congregation fellowship communion baptism tithe offering altar pulpit"
+    "congregation fellowship communion baptism tithe offering altar pulpit "
+    # --- People and places the SERMONS are actually about --------------------
+    # The list above names the books of the Bible but not the characters in
+    # them, and a sermon is about the characters. Proper nouns are also exactly
+    # what an accent breaks first, because there is no language model context
+    # to recover them from.
+    #
+    # Measured on this speaker, 2026-09-19. Reading the KJV aloud he gets
+    # "...I will send you to Pharaoh..." correct; speaking in his own voice it
+    # came out "Paravo" FOUR times out of four, in an Exodus sermon that also
+    # said Egypt 37 times, Israel 28 and Moses 12. The error then propagated:
+    # Malayalam rendered the mistake phonetically (പാരാവോ / പരവോ, and
+    # inconsistently) instead of ഫറവോൻ, so the congregation read a name that
+    # does not exist. Fixing it here fixes the whole chain.
+    #
+    # Budget: hotwords are truncated at max_length//2 - 1 = 223 tokens and the
+    # tail is dropped SILENTLY. Re-measure before adding more.
+    "Pharaoh Moses Aaron Egypt Israel Israelites Nile Sinai Canaan Jordan "
+    "Abraham Isaac Jacob Joseph Joshua David Solomon Elijah Elisha Noah "
+    "Jonah Nineveh Daniel Esther Ruth Job Babylon Jerusalem Bethlehem "
+    "Galilee Nazareth Passover Pentecost Calvary Bible Christian"
 )
+
 
 # --- Sentence assembly (translation side only) ---
 # The screens get English the moment Whisper produces it, but a fragment must
