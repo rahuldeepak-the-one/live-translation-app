@@ -127,6 +127,36 @@ MAX_SENTENCE_HOLD_S = 16.0   # translate anyway if the speaker trails off
 # checked first, so a properly ended sentence longer than this still flushes.
 MAX_PENDING_CHARS = 400      # ...or if they never punctuate at all
 
+# --- Stage 2b: a breath is not a full stop ---
+# SILENCE_DURATION_S is 0.6s, which is a breath. The speaker inhales mid
+# sentence, the buffer cuts, Whisper sees audio stopping and writes a confident
+# full stop, and looks_complete() believes it. Measured share of cuts flushed as
+# sentence endings that were WRONG — the next chunk continued the sentence:
+#   2026-08-30 ....  42 of 161  (26%)
+#   2026-08-23 .... 163 of 395  (41%)
+#
+# THIS IS NOT A DISCRIMINATOR, AND THAT IS THE WHOLE POINT. The obvious fix is
+# to hold a terminated sentence and flush it if no speech resumes within some
+# threshold. No such threshold exists: the gap-to-next-speech populations
+# overlap almost entirely (116 of 119 real endings on 2026-08-30 are shorter
+# than the longest breath). Worse, a wrong hold is not merely late — the join
+# must strip Whisper's false full stop to work at all, so a wrongly held real
+# ending becomes a run-on that split_source_sentences() can no longer undo.
+#
+# What separates them is the NEXT chunk's first letter: Whisper capitalises a
+# new sentence, and every continuation chunk observed began lowercase. So the
+# decision waits for that letter, and this constant only bounds how long we
+# wait before accepting that the speaker simply stopped and no letter is
+# coming. Set from the p90 of REAL-ending gaps (1.57s on 2026-08-30, 2.22s on
+# 2026-08-23) with headroom, NOT from analyze_segmentation.py's proposal —
+# that number answered the discrimination question this design abandons.
+#
+# The timer measures SILENCE. Speech resumes a median 1.3s after a cut but the
+# chunk carrying it is not transcribed for a median 6.2s; a timer counting
+# elapsed time would fire in the gap and flush before the deciding letter ever
+# existed. See UtterancePipeline.flush_if_stale().
+SENTENCE_GRACE_S = 3.0       # how long to wait for the letter that decides
+
 # --- Non-lexical fillers ---
 # Dropped only when a filler is the ENTIRE segment. After the audio stopped on
 # 2026-08-21 the pipeline emitted 8 phantom segments in 74 seconds and

@@ -22,7 +22,37 @@ def silence(seconds):
     return np.zeros(int(seconds * SAMPLE_RATE), dtype=np.int16).tobytes()
 
 
-def test_mic_audio_reaches_caption_screens():
+def speaker_stops(mic, monkeypatch):
+    """Stage 2b holds the last sentence until the speaker actually stops.
+
+    A terminated tail is no longer flushed at the cut: it waits
+    SENTENCE_GRACE_S for the next chunk's first letter, which is what decides
+    whether Whisper's full stop was real or invented at a breath. These socket
+    tests are about plumbing, not about that constant — tests/test_pipeline.py
+    owns it — so the wait collapses to zero and one more silent chunk carries
+    the flush.
+    """
+    monkeypatch.setattr("pipeline.SENTENCE_GRACE_S", 0.0)
+    mic.send_bytes(silence(0.5))
+
+
+def read_until_translation(screen, cap=10):
+    """Drain the screen socket up to the translation.
+
+    The message count is no longer fixed: a held sentence is published once as
+    `final:false` and again as `final:true` when it flushes, so asserting on a
+    hard-coded range() would have to be re-derived on every change here.
+    """
+    msgs = []
+    for _ in range(cap):
+        msgs.append(screen.receive_json())
+        if msgs[-1]["type"] == "translation":
+            return msgs
+    raise AssertionError(
+        f"no translation in {cap} messages: {[m['type'] for m in msgs]}")
+
+
+def test_mic_audio_reaches_caption_screens(monkeypatch):
     client = make_client()
     with client.websocket_connect("/ws/captions") as screen:
         assert screen.receive_json()["type"] == "history"
@@ -33,7 +63,8 @@ def test_mic_audio_reaches_caption_screens():
             # mic gets feedback: processing -> sentence -> listening
             got = [mic.receive_json()["type"] for _ in range(3)]
             assert got == ["status", "sentence", "status"]
-        msgs = [screen.receive_json() for _ in range(4)]
+            speaker_stops(mic, monkeypatch)
+        msgs = read_until_translation(screen)
         types = [m["type"] for m in msgs]
         assert "sentence" in types and "translation" in types
         sent = next(m for m in msgs if m["type"] == "sentence")
@@ -75,7 +106,7 @@ def test_pipeline_gets_a_transcript_log(tmp_path):
     assert app.state.pipeline.transcript is log
 
 
-def test_transcript_records_a_real_utterance(tmp_path):
+def test_transcript_records_a_real_utterance(tmp_path, monkeypatch):
     import json
     from transcript_log import TranscriptLog
 
@@ -87,6 +118,7 @@ def test_transcript_records_a_real_utterance(tmp_path):
         mic.send_bytes(loud(2.0))
         mic.send_bytes(silence(1.0))
         [mic.receive_json() for _ in range(3)]
+        speaker_stops(mic, monkeypatch)
 
     written = list(tmp_path.glob("*.jsonl"))
     assert len(written) == 1
@@ -112,9 +144,9 @@ def test_mic_loop_flushes_a_stale_sentence_during_silence():
         async def process(self, audio):
             return await self.inner.process(audio)
 
-        async def flush_if_stale(self):
+        async def flush_if_stale(self, has_speech=False):
             self.flushes += 1
-            return await self.inner.flush_if_stale()
+            return await self.inner.flush_if_stale(has_speech=has_speech)
 
     spy = SpyPipeline(app.state.pipeline)
     app.state.pipeline = spy
@@ -321,7 +353,7 @@ def test_speech_resuming_after_a_cut_records_the_gap(tmp_path):
     assert cuts[0]["speech_gap_s"] >= 0
 
 
-def test_instrumentation_does_not_change_what_the_screens_see(tmp_path):
+def test_instrumentation_does_not_change_what_the_screens_see(tmp_path, monkeypatch):
     # Stage 2b step one is measurement only. If recording altered the captions,
     # the data would describe a system we do not actually run on Sunday.
     from transcript_log import TranscriptLog
@@ -337,8 +369,43 @@ def test_instrumentation_does_not_change_what_the_screens_see(tmp_path):
             mic.send_bytes(loud(2.0))
             mic.send_bytes(silence(1.0))
             [mic.receive_json() for _ in range(3)]
-        msgs = [screen.receive_json() for _ in range(4)]
+            speaker_stops(mic, monkeypatch)
+        msgs = read_until_translation(screen)
     types = [m["type"] for m in msgs]
     assert "sentence" in types and "translation" in types
     sent = next(m for m in msgs if m["type"] == "sentence")
     assert sent["en"] == "Praise the Lord."
+
+
+def test_mic_loop_tells_the_pipeline_whether_the_chunk_had_speech():
+    """Stage 2b's grace timer measures SILENCE, so it needs this from the socket.
+
+    Speech resumes a median 1.3s after a cut, but the chunk carrying it is not
+    cut and transcribed for a median 6.2s. A 3s timer counting elapsed time
+    would fire in that window and flush the held sentence before the letter
+    that decides it ever existed — so an audible chunk has to refresh it.
+    """
+    app = create_app(stt=StubSTT("an unfinished thought"), translator=StubTranslator())
+
+    class SpyPipeline:
+        def __init__(self, inner):
+            self.inner = inner
+            self.speech_flags = []
+
+        async def process(self, audio):
+            return await self.inner.process(audio)
+
+        async def flush_if_stale(self, has_speech=False):
+            self.speech_flags.append(has_speech)
+            return await self.inner.flush_if_stale(has_speech=has_speech)
+
+    spy = SpyPipeline(app.state.pipeline)
+    app.state.pipeline = spy
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()            # ready
+        mic.send_bytes(silence(0.2))  # too short to trigger a cut
+        mic.send_bytes(loud(0.2))     # audible, still too short to cut
+
+    assert spy.speech_flags == [False, True], spy.speech_flags

@@ -333,6 +333,81 @@ overlap, no threshold separates them, and the honest conclusion is that timing
 alone cannot fix these cuts. That result is not a failure of the exercise; it is
 the finding that would justify the Stage 3 repair pass instead.
 
+### The measurement came back: the populations overlap
+
+Run on the first two real services (2026-09-19):
+
+```
+2026-08-30   42 of 161 cuts flushed as endings were WRONG (26%)
+2026-08-23  163 of 395 cuts flushed as endings were WRONG (41%)
+
+  WRONG (a breath)       median 1.35s   max 1.98s
+  RIGHT (a real ending)  median 1.07s   max 2.78s
+POPULATIONS OVERLAP — 116 of 119 real endings are shorter than the longest breath
+```
+
+**`SENTENCE_GRACE_S` as a discriminator does not exist**, and the grace hold as
+specified above would have been worse than shipping nothing. Two findings the
+spec did not anticipate:
+
+1. **The false terminator is the damage, not the timing.** In 43 of 43 breaths
+   on 2026-08-30 and 165 of 165 on 2026-08-23, Whisper had already written a
+   full stop into the held text. A hold that merely delays and joins is a
+   no-op — `split_source_sentences()` re-splits at that full stop. The join
+   must *strip* it. But once it strips, a wrongly held real ending becomes a
+   run-on nothing can undo — and ~97% of real endings resume speech inside any
+   workable window. Pure timing would have traded 26–41% broken sentences for
+   ~97% run-ons.
+2. **A zero-latency text heuristic does not work either.** Whether the held
+   text ends on a dangling function word separates nothing: breath 12% vs real
+   16% (08-30), 10% vs 11% (08-23). Whisper does not just add a period, it
+   rewrites the tail so it reads finished.
+
+### What shipped instead: the capitalisation gate
+
+The discriminator is the NEXT chunk's first letter, exactly as the
+instrumentation's ground truth always implied. A terminated tail is held; the
+next chunk decides it:
+
+- **lowercase** → a breath. Strip the false terminator, join, same id.
+- **uppercase** → a real ending. Flush it alone; no run-on.
+- **neither arrives** → the speaker stopped. `SENTENCE_GRACE_S` flushes it
+  unmodified.
+
+`SENTENCE_GRACE_S` survives with a different job: it bounds the wait, it does
+not discriminate. Set to 3.0s from the p90 of real-ending gaps, not from
+`analyze_segmentation.py`'s proposal — that number answered the question this
+design abandons.
+
+**The timer had to measure silence, not elapsed time.** Speech resumes a median
+1.3s after a cut but the chunk carrying it is not transcribed for a median
+6.2s, so an elapsed-time timer fires in the gap and flushes before the deciding
+letter exists. `flush_if_stale(has_speech=...)` refreshes on audible speech.
+
+**Cost, accepted deliberately:** a chunk's last sentence now waits for the next
+chunk before it is translated. English captions are unaffected — they still
+publish at the cut — and the held tail is published `final:false`, so it shows
+grey until settled. No protocol change; `final` was always the contract.
+
+**Result, replaying both services' recorded chunks through the new pipeline:**
+
+```
+                     published   orphaned tails (English beginning lowercase)
+2026-08-30 baseline        283   51  (18.0%)
+2026-08-30 replay          241    9  ( 3.7%)
+2026-08-23 baseline        799  178  (22.3%)
+2026-08-23 replay          636   15  ( 2.4%)
+```
+
+Note the metric is partly circular — joining on a lowercase opener removes
+lowercase openers by construction — so it measures that the damage is gone, not
+that every join was correct. The residual 2–4% are grace-timer and char-cap
+flushes, which the gate never sees. A native-speaker read of a replayed service
+is the check this cannot substitute for.
+
+`analyze_segmentation.py` must NOT be used to grade the result: it grades on the
+same capitalisation the gate now optimises against.
+
 Stage 2 makes the flow smooth and `final` honest. Stage 2b makes the boundaries
 correct.
 

@@ -169,12 +169,19 @@ def create_app(stt=None, translator=None, transcript=None):
                         # that separates a breath from a finished sentence.
                         # Idempotent, so calling it on every speech-bearing
                         # chunk is fine.
-                        if buf.has_speech():
+                        speech = buf.has_speech()
+                        if speech:
                             app.state.seglog.record_speech_resumed()
                         # Quiet chunk: the only chance to translate a sentence
                         # the speaker started and never finished, since
                         # process() runs on speech only.
-                        await app.state.pipeline.flush_if_stale()
+                        #
+                        # Stage 2b: `speech` is what stops the short grace timer
+                        # firing between speech resuming and the chunk carrying
+                        # it being transcribed — a median 6.2s window in which a
+                        # held sentence would otherwise be flushed before the
+                        # letter that decides it exists.
+                        await app.state.pipeline.flush_if_stale(has_speech=speech)
         except WebSocketDisconnect:
             pass
         # Whatever cut is still open gets written with a null gap rather than

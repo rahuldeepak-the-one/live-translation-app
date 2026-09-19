@@ -7,7 +7,8 @@ config.SENTENCE_END_CHARS for why a fragment must never reach the translator.
 import logging
 import time
 
-from config import SENTENCE_END_CHARS, MAX_SENTENCE_HOLD_S, MAX_PENDING_CHARS
+from config import (SENTENCE_END_CHARS, MAX_SENTENCE_HOLD_S, MAX_PENDING_CHARS,
+                    SENTENCE_GRACE_S)
 from translator import split_source_sentences
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,33 @@ def strip_trail_off(text):
                 break
         else:
             return out
+
+
+def continues_previous(text):
+    """True if this chunk continues the held sentence rather than starting one.
+
+    Whisper capitalises a new sentence, so a lowercase opener means the speaker
+    only paused for breath and the full stop on the held text is Whisper's
+    invention. This is the one signal that separates a breath from a real
+    ending — timing provably cannot (see config.SENTENCE_GRACE_S).
+
+    Leading quotes and brackets are stripped first: `"under the master` is a
+    continuation whose first CHARACTER is not a letter.
+    """
+    stripped = (text or "").lstrip("\"'([ \t")
+    return bool(stripped) and stripped[0].islower()
+
+
+def strip_false_terminator(text):
+    """Drop the sentence-ending punctuation Whisper invented at a breath.
+
+    Joining without this is a no-op: split_source_sentences() re-splits at the
+    full stop and the translator sees the same two fragments it always did. In
+    every breath observed — 43 of 43 on 2026-08-30, 165 of 165 on 2026-08-23 —
+    the held text ended in one of these, so this is the load-bearing half of
+    the fix, not a tidy-up.
+    """
+    return text.rstrip().rstrip(SENTENCE_END_CHARS).rstrip()
 
 
 def drop_partial_word(text):
@@ -123,12 +151,37 @@ class UtterancePipeline:
         # welding across it invents sentences nobody said. Normally the mic
         # socket's flush_if_stale() has already cleared this on a quiet chunk.
         if (self._pending is not None
-                and self._clock() - self._pending["touched"] >= MAX_SENTENCE_HOLD_S):
+                and self._clock() - self._pending["touched"] >= self._hold_limit()):
             stale_id, stale_text = self._pending["id"], self._pending["text"]
             self._pending = None
             logger.info("#%d flushed on new speech after silence", stale_id)
             await self._flush(stale_id, stale_text, 0.0)
             self._context = ""
+
+        # Stage 2b: a HELD TERMINATED sentence is decided here, by this chunk's
+        # first letter. Lowercase means the full stop was Whisper's invention at
+        # a breath — strip it and join. Uppercase means the sentence really had
+        # ended, so it is flushed on its own rather than welded into a run-on
+        # that split_source_sentences() could never undo. Timing is not
+        # consulted: it provably cannot tell these apart.
+        confirmed = []
+        if self._pending is not None and self._pending["terminated"]:
+            if continues_previous(text):
+                self._pending = dict(
+                    self._pending,
+                    text=strip_false_terminator(self._pending["text"]),
+                )
+                logger.info("#%d breath joined, not a sentence end",
+                            self._pending["id"])
+            else:
+                confirmed = [(self._pending["id"], self._pending["text"])]
+                self._pending = None
+                logger.debug("#%d confirmed a real ending", confirmed[0][0])
+                # Solid on the wall straight away — no GPU in this call. Its
+                # TRANSLATION is deferred into this chunk's batch below, so it
+                # neither delays this chunk's English nor costs an extra round
+                # trip behind the GPU lock.
+                await self.hub.publish_sentence(*confirmed[0], final=True)
 
         if self._pending is None:
             self._counter += 1
@@ -164,8 +217,15 @@ class UtterancePipeline:
         # computed from two clock reads with nothing between them, so it was
         # always ~0 -- and had it measured anything it would have measured
         # sentence AGE, which is what the 2026-08-21 audit removed.
-        tail_complete = (looks_complete(parts[-1])
-                         or len(parts[-1]) >= MAX_PENDING_CHARS)
+        tail_text = parts[-1]
+        # The char cap is a backstop for a speaker who never punctuates, and it
+        # alone still flushes outright. Holding an over-long tail would let the
+        # next lowercase chunk join it and grow the sentence without bound,
+        # which is the runaway the cap exists to stop.
+        tail_over_cap = len(tail_text) >= MAX_PENDING_CHARS
+        # Stage 2b: a terminated tail is no longer flushed here. Whisper's full
+        # stop is a claim the next chunk's first letter will confirm or deny.
+        tail_terminated = looks_complete(tail_text)
 
         numbered = []
         for i, part in enumerate(parts):
@@ -180,18 +240,24 @@ class UtterancePipeline:
         # Re-publishing an id revises that row rather than duplicating it.
         for i, (part_id, part) in enumerate(numbered):
             is_last = i == len(numbered) - 1
+            # A held tail is never `final`: it may yet lose its full stop to
+            # the next chunk. That is the correction contract working as
+            # written, and it is why stage 2b needs no protocol change.
             await self.hub.publish_sentence(
-                part_id, part, final=(tail_complete or not is_last))
+                part_id, part, final=(tail_over_cap or not is_last))
 
-        complete = numbered if tail_complete else numbered[:-1]
-        if not tail_complete:
+        # The confirmed ending leads: it precedes this chunk's sentences, so it
+        # must be translated with the context they will then build on.
+        complete = confirmed + (numbered if tail_over_cap else numbered[:-1])
+        if tail_over_cap:
+            self._pending = None
+        else:
             pending_id, pending_text = numbered[-1]
             self._pending = {"id": pending_id, "text": pending_text,
-                             "touched": touched}
-            logger.debug("#%d held (%d chars): %s",
-                         pending_id, len(pending_text), pending_text)
-        else:
-            self._pending = None
+                             "touched": touched, "terminated": tail_terminated}
+            logger.debug("#%d held (%d chars, terminated=%s): %s",
+                         pending_id, len(pending_text), tail_terminated,
+                         pending_text)
 
         if complete:
             # ONE translator call for every complete sentence in this chunk.
@@ -203,7 +269,21 @@ class UtterancePipeline:
         last_id, last_text = numbered[-1]
         return last_id, last_text
 
-    async def flush_if_stale(self):
+    def _hold_limit(self):
+        """How long the current hold may wait before it is flushed anyway.
+
+        Two holds, two questions, two constants. An UNTERMINATED fragment waits
+        MAX_SENTENCE_HOLD_S for a continuation that cannot arrive before the
+        next chunk is cut — 16.0s, measured against real gaps, and stage 2b has
+        no business moving it. A TERMINATED sentence waits only
+        SENTENCE_GRACE_S for the first letter of the next chunk, which decides
+        whether its full stop was real.
+        """
+        if self._pending is not None and self._pending["terminated"]:
+            return SENTENCE_GRACE_S
+        return MAX_SENTENCE_HOLD_S
+
+    async def flush_if_stale(self, has_speech=False):
         """Translate a held sentence the speaker never finished.
 
         process() only runs when speech arrives, so without this the last
@@ -213,10 +293,21 @@ class UtterancePipeline:
 
         The clock runs from the last chunk that extended the sentence, so this
         fires on silence rather than on a long sentence.
+
+        `has_speech` is what keeps the short grace timer honest. Speech resumes
+        a median 1.3s after a cut, but the chunk carrying it is not cut and
+        transcribed for a median 6.2s. A timer counting elapsed time would fire
+        in that window and flush the held sentence before the letter that
+        decides it ever existed. Audible speech therefore refreshes the clock:
+        the timer measures SILENCE, the same rule the 2026-08-21 audit
+        established for MAX_SENTENCE_HOLD_S.
         """
         if self._pending is None:
             return None
-        if self._clock() - self._pending["touched"] < MAX_SENTENCE_HOLD_S:
+        if has_speech:
+            self._pending["touched"] = self._clock()
+            return None
+        if self._clock() - self._pending["touched"] < self._hold_limit():
             return None
         sid, joined = self._pending["id"], self._pending["text"]
         self._pending = None
@@ -253,6 +344,11 @@ class UtterancePipeline:
 
     async def _flush(self, sid, joined, t_stt):
         self._pending = None
+        # Flushing IS the decision that this sentence will not change again, so
+        # it is also where `final` becomes true. Without this a held tail keeps
+        # the grey it was published with and stays grey on the wall forever —
+        # every sentence stage 2b holds, which is now every sentence.
+        await self.hub.publish_sentence(sid, joined, final=True)
         t1 = self._clock()
         cleaned = clean_for_translation(joined)
         translations = await self.translator.translate_all(

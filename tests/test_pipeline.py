@@ -22,16 +22,21 @@ class StubTranslator:
 
 
 async def test_speech_flows_to_screens():
+    clock = FakeClock()
     hub = BroadcastHub()
     screen = FakeWS()
     await hub.register(screen)
-    pipe = UtterancePipeline(StubSTT("Hello world."), StubTranslator(), hub)
+    pipe = UtterancePipeline(StubSTT("Hello world."), StubTranslator(), hub,
+                             clock=clock)
 
     result = await pipe.process(None)  # stub ignores audio
+    await speaker_stops(pipe, clock)
 
     assert result == (1, "Hello world.")
     types = [m["type"] for m in screen.sent]
-    assert types == ["history", "display", "sentence", "translation"]
+    # Stage 2b publishes the sentence twice: grey while held, solid once the
+    # grace timer confirms no continuation is coming.
+    assert types == ["history", "display", "sentence", "sentence", "translation"]
     translation = next(m for m in screen.sent if m["type"] == "translation")
     assert translation["ml"] == "ml:Hello world."
 
@@ -77,14 +82,38 @@ def kinds(screen):
     return [m["type"] for m in screen.sent]
 
 
-async def test_complete_sentence_translates_immediately():
+async def speaker_stops(pipe, clock):
+    """End the utterance the way stage 2b requires.
+
+    A terminated tail is no longer flushed at its cut — it waits for the next
+    chunk's first letter to confirm or deny Whisper's full stop. When no next
+    chunk is coming, the grace timer is what delivers it.
+    """
+    from config import SENTENCE_GRACE_S
+    clock.advance(SENTENCE_GRACE_S + 0.1)
+    return await pipe.flush_if_stale()
+
+
+async def test_complete_sentence_translates_once_the_speaker_stops():
+    """Renamed by stage 2b: a full stop is a claim, not yet a decision.
+
+    It used to translate at the cut. It now waits for the next chunk's first
+    letter, because 26-41% of those full stops were Whisper inventing one at a
+    breath. Nothing follows here, so the grace timer settles it.
+    """
+    clock = FakeClock()
     hub, screen = BroadcastHub(), FakeWS()
     await hub.register(screen)
-    pipe = UtterancePipeline(SeqSTT("God is love."), StubTranslator(), hub)
+    pipe = UtterancePipeline(SeqSTT("God is love."), StubTranslator(), hub,
+                             clock=clock)
 
     await pipe.process(None)
+    assert kinds(screen) == ["history", "display", "sentence"]
 
-    assert kinds(screen) == ["history", "display", "sentence", "translation"]
+    await speaker_stops(pipe, clock)
+
+    assert kinds(screen) == ["history", "display", "sentence", "sentence",
+                             "translation"]
 
 
 async def test_unfinished_sentence_publishes_english_but_holds_translation():
@@ -103,12 +132,15 @@ async def test_unfinished_sentence_publishes_english_but_holds_translation():
 async def test_continuation_joins_and_translates_the_whole_sentence():
     hub, screen = BroadcastHub(), FakeWS()
     await hub.register(screen)
+    clock = FakeClock()
     pipe = UtterancePipeline(
-        SeqSTT("But the translations", "are good."), StubTranslator(), hub
+        SeqSTT("But the translations", "are good."), StubTranslator(), hub,
+        clock=clock,
     )
 
     await pipe.process(None)
     result = await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert result == (1, "But the translations are good.")
     translation = [m for m in screen.sent if m["type"] == "translation"]
@@ -171,10 +203,13 @@ async def test_next_sentence_gets_a_fresh_id_after_a_flush():
 async def test_question_and_exclamation_end_a_sentence():
     hub, screen = BroadcastHub(), FakeWS()
     await hub.register(screen)
-    pipe = UtterancePipeline(SeqSTT("Do you believe?", "Amen!"), StubTranslator(), hub)
+    clock = FakeClock()
+    pipe = UtterancePipeline(SeqSTT("Do you believe?", "Amen!"), StubTranslator(),
+                             hub, clock=clock)
 
     await pipe.process(None)
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert len([m for m in screen.sent if m["type"] == "translation"]) == 2
 
@@ -188,11 +223,13 @@ async def test_utterance_is_written_to_the_transcript():
             self.records.append(record)
 
     log = FakeLog()
+    clock = FakeClock()
     hub = BroadcastHub()
     pipe = UtterancePipeline(SeqSTT("God is love."), StubTranslator(), hub,
-                             transcript=log)
+                             transcript=log, clock=clock)
 
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert len(log.records) == 1
     assert log.records[0]["en"] == "God is love."
@@ -388,16 +425,18 @@ async def test_ellipsis_fragment_is_held_and_joined_not_flushed():
             return [{"ml": "", "te": "", "hi": ""} for _ in sentences]
 
     rec = Rec()
+    clock = FakeClock()
     pipe = UtterancePipeline(
         SeqSTT("The steward's unethical behavior is never...",
                "endorsed. His mismanagement is the reason he gets fired."),
-        rec, BroadcastHub(), clock=FakeClock(),
+        rec, BroadcastHub(), clock=clock,
     )
 
     await pipe.process(None)
     assert rec.seen == [], "flushed the trail-off instead of holding it"
 
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     # Stage 2 publishes per sentence, so the joined text arrives as two rows.
     # The point of this test is unchanged: "is never" met "endorsed" instead of
@@ -449,6 +488,7 @@ async def test_hold_timeout_measures_silence_not_sentence_age():
     )
 
     await pipe.process(None)                       # the continuation lands
+    await speaker_stops(pipe, clock)               # stage 2b holds the tail
 
     # Two complete sentences under Stage 2, one row each. What matters is that
     # the partial word was rejoined rather than flushed as a fragment.
@@ -491,20 +531,25 @@ class CtxTranslator:
 
 
 async def test_first_sentence_has_no_context():
+    clock = FakeClock()
     tr = CtxTranslator()
-    pipe = UtterancePipeline(SeqSTT("God is love."), tr, BroadcastHub())
+    pipe = UtterancePipeline(SeqSTT("God is love."), tr, BroadcastHub(),
+                             clock=clock)
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
     assert tr.calls == [("God is love.", "")]
 
 
 async def test_the_previous_sentence_becomes_the_context():
     tr = CtxTranslator()
+    clock = FakeClock()
     pipe = UtterancePipeline(
         SeqSTT("Remember the economic system.", "Stewards made their income."),
-        tr, BroadcastHub(),
+        tr, BroadcastHub(), clock=clock,
     )
     await pipe.process(None)
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert tr.calls[1] == ("Stewards made their income.",
                            "Remember the economic system.")
@@ -523,6 +568,7 @@ async def test_context_is_the_cleaned_text_not_the_raw_english():
     clock.advance(MAX_SENTENCE_HOLD_S + 0.1)
     await pipe.flush_if_stale()
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert tr.calls[0][0] == "He trails off"
     assert "..." not in tr.calls[1][1], tr.calls[1][1]
@@ -546,6 +592,7 @@ async def test_a_long_silence_clears_the_context():
     clock.advance(MAX_SENTENCE_HOLD_S + 0.1)
     await pipe.flush_if_stale()          # speaker stopped -> context is stale
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert tr.calls[1][1] == "", f"stale context carried: {tr.calls[1][1]!r}"
 
@@ -553,11 +600,14 @@ async def test_a_long_silence_clears_the_context():
 async def test_context_survives_a_normal_sentence_boundary():
     """Only silence clears it — consecutive sentences keep their context."""
     tr = CtxTranslator()
+    clock = FakeClock()
     pipe = UtterancePipeline(
         SeqSTT("First one.", "Second one.", "Third one."), tr, BroadcastHub(),
+        clock=clock,
     )
     for _ in range(3):
         await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert tr.calls[1][1] == "First one."
     assert tr.calls[2][1] == "Second one."
@@ -695,16 +745,22 @@ async def test_a_multi_sentence_chunk_publishes_each_sentence_separately():
     assert [m["en"] for m in sentences] == [
         "Wisdom is not moral.", "It is practical.", "Amen."]
     assert [m["id"] for m in sentences] == [1, 2, 3]
-    assert all(m["final"] for m in sentences)
+    # Stage 2b: the TAIL is held pending the next chunk's first letter, so it
+    # is the one sentence not yet final. The earlier two are settled — their
+    # boundaries came from Whisper's own punctuation mid-chunk, not from the
+    # audio cut, so no breath can be hiding in them.
+    assert [m["final"] for m in sentences] == [True, True, False]
 
 
 async def test_every_sentence_gets_its_own_translation():
     hub, screen = BroadcastHub(), FakeWS()
     await hub.register(screen)
+    clock = FakeClock()
     pipe = UtterancePipeline(SeqSTT("God is love. He loves the world."),
-                             RecordingTranslator(), hub)
+                             RecordingTranslator(), hub, clock=clock)
 
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     translations = [m for m in screen.sent if m["type"] == "translation"]
     assert [m["id"] for m in translations] == [1, 2]
@@ -726,7 +782,10 @@ async def test_a_chunk_costs_ONE_translator_call_however_many_sentences():
     await pipe.process(None)
 
     assert len(translator.sentence_calls) == 1, translator.sentence_calls
-    assert translator.sentence_calls[0] == ["One.", "Two.", "Three."]
+    # Stage 2b holds the tail for the next chunk's first letter, so the batch is
+    # every sentence this chunk COMPLETED. Still one call, not one per
+    # sentence — which is the property this test exists to protect.
+    assert translator.sentence_calls[0] == ["One.", "Two."]
 
 
 async def test_a_trailing_incomplete_sentence_stays_pending():
@@ -750,17 +809,22 @@ async def test_a_trailing_incomplete_sentence_stays_pending():
 async def test_the_pending_sentence_keeps_its_id_across_chunks():
     hub, screen = BroadcastHub(), FakeWS()
     await hub.register(screen)
+    clock = FakeClock()
     pipe = UtterancePipeline(SeqSTT("First done. But it is", "practical."),
-                             RecordingTranslator(), hub)
+                             RecordingTranslator(), hub, clock=clock)
 
     await pipe.process(None)
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     sentences = [m for m in screen.sent if m["type"] == "sentence"]
-    # id 2 is revised in place, never duplicated under a new id
+    # id 2 is revised in place, never duplicated under a new id. Stage 2b adds
+    # the last row: the completed sentence is still grey until the grace timer
+    # confirms nothing follows it, then republished solid under the same id.
     assert [(m["id"], m["en"], m["final"]) for m in sentences] == [
         (1, "First done.", True),
         (2, "But it is", False),
+        (2, "But it is practical.", False),
         (2, "But it is practical.", True),
     ]
 
@@ -776,17 +840,22 @@ async def test_ids_stay_monotonic_across_chunks():
 
     ids = [m["id"] for m in screen.sent if m["type"] == "sentence"]
     assert ids == sorted(ids)
-    assert ids == [1, 2, 3]
+    # id 2 appears twice: held grey at its cut, then republished solid when the
+    # uppercase "A three." confirmed its full stop was real.
+    assert ids == [1, 2, 2, 3]
 
 
 async def test_a_single_complete_sentence_still_works():
     hub, screen = BroadcastHub(), FakeWS()
     await hub.register(screen)
-    pipe = UtterancePipeline(SeqSTT("God is love."), RecordingTranslator(), hub)
+    clock = FakeClock()
+    pipe = UtterancePipeline(SeqSTT("God is love."), RecordingTranslator(), hub,
+                             clock=clock)
 
     assert await pipe.process(None) == (1, "God is love.")
+    await speaker_stops(pipe, clock)
     assert [m["type"] for m in screen.sent] == [
-        "history", "display", "sentence", "translation"]
+        "history", "display", "sentence", "sentence", "translation"]
 
 
 async def test_each_sentence_is_written_to_the_transcript_separately():
@@ -798,11 +867,256 @@ async def test_each_sentence_is_written_to_the_transcript_separately():
             self.records.append(record)
 
     log = FakeLog()
+    clock = FakeClock()
     hub = BroadcastHub()
     pipe = UtterancePipeline(SeqSTT("God is love. He loves the world."),
-                             RecordingTranslator(), hub, transcript=log)
+                             RecordingTranslator(), hub, transcript=log,
+                             clock=clock)
 
     await pipe.process(None)
+    await speaker_stops(pipe, clock)
 
     assert [r["en"] for r in log.records] == ["God is love.", "He loves the world."]
     assert [r["id"] for r in log.records] == [1, 2]
+
+
+# --- Stage 2b: a breath is not a full stop -----------------------------------
+# Measured on 2026-08-30 (n=166 cuts flushed as endings) and 2026-08-23 (n=410):
+# 26% and 41% of them were wrong — the next chunk continued the sentence. The
+# gap-to-next-speech populations OVERLAP completely (116 of 119 real endings on
+# 08-30 are shorter than the longest breath), so no timer can tell the two
+# apart. What does tell them apart is the next chunk's first letter: Whisper
+# capitalises a new sentence, and every continuation chunk observed began
+# lowercase. So the flush decision waits for that letter.
+#
+# The false terminator matters as much as the hold. In 43/43 and 165/165 breath
+# cases the held text already ends in ".", which split_source_sentences() would
+# re-split at — a join alone is a no-op, the "." has to go.
+
+class SeenTranslator:
+    """Records every source string that reaches the translator."""
+    def __init__(self):
+        self.seen = []
+
+    async def translate_all(self, text, context=""):
+        self.seen.append(text)
+        return {"ml": f"ml:{text}", "te": f"te:{text}", "hi": f"hi:{text}"}
+
+    async def translate_sentences(self, sentences, context=""):
+        self.seen.extend(sentences)
+        return [{"ml": f"ml:{s}", "te": f"te:{s}", "hi": f"hi:{s}"}
+                for s in sentences]
+
+
+async def test_a_terminated_tail_is_held_instead_of_translated():
+    """Whisper's full stop at a cut is a claim, not evidence. Wait for proof."""
+    rec = SeenTranslator()
+    pipe = UtterancePipeline(SeqSTT("someone who acts."), rec, BroadcastHub(),
+                             clock=FakeClock())
+
+    await pipe.process(None)
+
+    assert rec.seen == [], "translated the tail before the next chunk could deny it"
+
+
+async def test_a_held_tail_publishes_english_as_not_final():
+    """It may still change, and `final` is the entire correction contract."""
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(SeqSTT("someone who acts."), SeenTranslator(),
+                             hub, clock=FakeClock())
+
+    await pipe.process(None)
+
+    sentence = next(m for m in screen.sent if m["type"] == "sentence")
+    assert sentence["final"] is False
+
+
+async def test_a_lowercase_next_chunk_strips_the_false_terminator_and_joins():
+    """The 2026-08-30 seam: '...in spite of his big understanding.' + 'under the'.
+
+    A join that leaves the "." in place is a no-op — split_source_sentences()
+    re-splits at it and the translator sees the same two fragments.
+    """
+    from config import SENTENCE_GRACE_S
+    clock = FakeClock()
+    rec = SeenTranslator()
+    pipe = UtterancePipeline(
+        SeqSTT("someone who acts.", "with practical foresight."),
+        rec, BroadcastHub(), clock=clock,
+    )
+
+    await pipe.process(None)
+    await pipe.process(None)
+    # The JOINED text ends in a full stop too, so it is itself a held tail
+    # awaiting its own deciding letter. The speaker stops instead.
+    clock.advance(SENTENCE_GRACE_S + 0.1)
+    await pipe.flush_if_stale()
+
+    assert rec.seen == ["someone who acts with practical foresight."], rec.seen
+
+
+async def test_a_lowercase_continuation_keeps_one_sentence_id():
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(
+        SeqSTT("someone who acts.", "with practical foresight."),
+        SeenTranslator(), hub, clock=FakeClock(),
+    )
+
+    await pipe.process(None)
+    await pipe.process(None)
+
+    ids = {m["id"] for m in screen.sent if m["type"] == "sentence"}
+    assert ids == {1}
+
+
+async def test_an_uppercase_next_chunk_flushes_the_held_sentence_alone():
+    """A real ending must not be welded into a run-on the splitter cannot undo.
+
+    This is the risk the capitalisation gate exists to avoid: ~97% of real
+    endings resume speech inside any workable grace window, so a pure timer
+    would join nearly all of them.
+    """
+    rec = SeenTranslator()
+    pipe = UtterancePipeline(
+        SeqSTT("The steward is not an example of righteousness.",
+               "He is an example of urgency."),
+        rec, BroadcastHub(), clock=FakeClock(),
+    )
+
+    await pipe.process(None)
+    await pipe.process(None)
+
+    assert rec.seen == ["The steward is not an example of righteousness."], rec.seen
+
+
+async def test_an_uppercase_next_chunk_gets_a_fresh_id():
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(
+        SeqSTT("God is love.", "He gave his only son."),
+        SeenTranslator(), hub, clock=FakeClock(),
+    )
+
+    await pipe.process(None)
+    await pipe.process(None)
+
+    ids = [m["id"] for m in screen.sent if m["type"] == "sentence"]
+    assert ids == [1, 1, 2], ids
+
+
+async def test_the_grace_timer_flushes_a_held_tail_when_the_speaker_stops():
+    """No next chunk is ever coming — the sentence must still be translated."""
+    from config import SENTENCE_GRACE_S
+    clock = FakeClock()
+    rec = SeenTranslator()
+    pipe = UtterancePipeline(SeqSTT("God is love."), rec, BroadcastHub(),
+                             clock=clock)
+
+    await pipe.process(None)
+    assert rec.seen == []
+
+    clock.advance(SENTENCE_GRACE_S + 0.1)
+    assert await pipe.flush_if_stale() == 1
+    assert rec.seen == ["God is love."]
+
+
+async def test_the_grace_timer_flushes_the_tail_with_its_terminator_intact():
+    """Nothing denied the full stop, so it stands."""
+    from config import SENTENCE_GRACE_S
+    clock = FakeClock()
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(SeqSTT("God is love."), SeenTranslator(), hub,
+                             clock=clock)
+
+    await pipe.process(None)
+    clock.advance(SENTENCE_GRACE_S + 0.1)
+    await pipe.flush_if_stale()
+
+    finals = [m for m in screen.sent if m["type"] == "sentence" and m["final"]]
+    assert finals and finals[-1]["en"] == "God is love."
+
+
+async def test_speech_still_audible_holds_the_grace_timer_open():
+    """The trap this design would otherwise walk into.
+
+    Speech resumes ~1.3s after the cut, but the chunk carrying it is not cut
+    and transcribed for a median 6.2s. A grace timer counting elapsed time
+    would fire in between and flush before the deciding letter ever existed.
+    So the timer measures SILENCE: audible speech refreshes it.
+    """
+    from config import SENTENCE_GRACE_S
+    clock = FakeClock()
+    rec = SeenTranslator()
+    pipe = UtterancePipeline(SeqSTT("someone who acts."), rec, BroadcastHub(),
+                             clock=clock)
+
+    await pipe.process(None)
+    clock.advance(SENTENCE_GRACE_S + 0.1)
+
+    assert await pipe.flush_if_stale(has_speech=True) is None
+    assert rec.seen == [], "flushed while the speaker was still audible"
+
+
+async def test_an_unterminated_hold_still_waits_the_full_measured_constant():
+    """MAX_SENTENCE_HOLD_S was measured against real gaps. 2b must not move it.
+
+    A fragment's continuation cannot arrive before the next chunk is cut, and
+    the grace timer is far shorter than that. Applying the grace to an
+    unterminated fragment would re-create the 4.0s bug the 16s constant fixed.
+    """
+    from config import SENTENCE_GRACE_S
+    clock = FakeClock()
+    rec = SeenTranslator()
+    pipe = UtterancePipeline(SeqSTT("The man's ability to un"), rec,
+                             BroadcastHub(), clock=clock)
+
+    await pipe.process(None)
+    clock.advance(SENTENCE_GRACE_S + 0.1)
+
+    assert await pipe.flush_if_stale() is None
+    assert rec.seen == []
+
+
+def test_the_grace_is_shorter_than_the_unterminated_hold():
+    """They answer different questions and must not be the same number.
+
+    The grace bounds a wait for a letter that arrives in ~6s; the hold bounds a
+    wait for a continuation that cannot arrive before a chunk is cut.
+    """
+    from config import SENTENCE_GRACE_S, MAX_SENTENCE_HOLD_S
+    assert 0 < SENTENCE_GRACE_S < MAX_SENTENCE_HOLD_S
+
+
+def test_the_grace_covers_the_measured_real_ending_gaps():
+    """p90 of real-ending speech gaps: 1.57s (2026-08-30), 2.22s (2026-08-23).
+
+    Below that and the timer fires on sentences whose continuation was about to
+    arrive, which is the failure the whole design is avoiding.
+    """
+    from config import SENTENCE_GRACE_S
+    assert SENTENCE_GRACE_S >= 2.22
+
+
+async def test_english_is_published_before_the_previous_sentence_is_translated():
+    """English first, always — confirming an ending must not stall the live lane.
+
+    When this chunk's capital letter confirms the held sentence really ended,
+    that sentence still needs translating: a GPU round trip of ~0.8s behind a
+    lock. Doing it before publishing THIS chunk's English would put that delay
+    straight onto the caption lane the whole design keeps live.
+    """
+    hub, screen = BroadcastHub(), FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(
+        SeqSTT("God is love.", "He gave his only son."),
+        SeenTranslator(), hub, clock=FakeClock(),
+    )
+
+    await pipe.process(None)
+    await pipe.process(None)
+
+    seq = [(m["type"], m.get("id")) for m in screen.sent]
+    assert seq.index(("sentence", 2)) < seq.index(("translation", 1)), seq
