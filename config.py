@@ -151,7 +151,11 @@ WHISPER_HOTWORDS = (
     "Pharaoh Moses Aaron Egypt Israel Israelites Nile Sinai Canaan Jordan "
     "Abraham Isaac Jacob Joseph Joshua David Solomon Elijah Elisha Noah "
     "Jonah Nineveh Daniel Esther Ruth Job Babylon Jerusalem Bethlehem "
-    "Galilee Nazareth Passover Pentecost Calvary Bible Christian"
+    "Galilee Nazareth Passover Pentecost Calvary Bible Christian "
+    # Jonah, evidenced: "fled to Tarshish" was transcribed "pled to
+    # Tarshes" on 2026-08-30, and all three languages then faithfully
+    # translated the wrong proper noun.
+    "Tarshish Joppa Samaria Gethsemane Golgotha Zion"
 )
 
 
