@@ -694,3 +694,38 @@ def test_translate_all_still_joins_for_existing_callers():
     out = _run_with_timeout(lambda: t.translate_all_sync("God is love. He loves the world."))
     assert set(out.keys()) == {"ml", "te", "hi"}
     assert isinstance(out["ml"], str)
+
+
+# --- "idol" came back as "ideal" — the opposite of the sermon's point --------
+# Found 2026-09-20 auditing real service transcripts with a 27B multilingual
+# model. "The work can become an idol." was translated as ఆదర్శం / आदर्श,
+# meaning "ideal" — an aspiration to pursue rather than a false god to reject.
+# Malayalam got വിഗ്രഹം right; only te and hi failed, but SOURCE_REWRITES is
+# uniform across languages, so the row has to be safe in all three.
+#
+# Apposition was tried first and REJECTED: "your idols, false gods" parses as a
+# VOCATIVE in all three ("O false gods, turn away from your idols"), which is
+# worse than the bug. Substitution has no appositive to misparse.
+# Verified on 5 sentences x 3 languages; the one imperfect case
+# ("The idol of success") stays correct in all three, with mild Telugu
+# awkwardness. The English on screen is untouched — rewrites are translator
+# input only.
+
+def test_idol_reaches_the_translator_as_a_false_god():
+    from translator import apply_source_rewrites
+    assert apply_source_rewrites("The work can become an idol.") == \
+        "The work can become a false god."
+
+
+def test_plural_idols_is_rewritten_too():
+    from translator import apply_source_rewrites
+    assert apply_source_rewrites("They worshipped idols.") == \
+        "They worshipped false gods."
+
+
+def test_idolatry_is_left_alone():
+    """It already translates correctly (വിഗ്രഹാരാധന / విగ్రహారాధన / मूर्तिपूजा),
+    and a word-boundary match must not reach inside it."""
+    from translator import apply_source_rewrites
+    assert apply_source_rewrites("This is idolatry.") == "This is idolatry."
+    assert apply_source_rewrites("an idolater") == "an idolater"

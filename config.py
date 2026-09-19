@@ -277,6 +277,26 @@ SOURCE_REWRITES = (
     # "praises shrewdness, not dishonesty" lost the negative prefix in ml and
     # te, becoming "praises cleverness, not HONESTY".
     (r",\s*not dishonesty\b", " rather than dishonest behaviour"),
+
+    # "The work can become an idol." came back as ఆదర్శం / आदर्श — "ideal".
+    # An aspiration to chase, not a false god to reject: the exact opposite of
+    # what the sermon said, in two of three languages. (ml got വിഗ്രഹം right,
+    # but this table is uniform, so the row was checked in all three.)
+    #
+    # Plural first: \bidol\b cannot match "idols" anyway, but the order makes
+    # that independent of regex subtleties. Neither touches "idolatry" or
+    # "idolater", which already translate correctly.
+    #
+    # Substitution, NOT apposition. "your idols, false gods" was tried and is
+    # worse than the bug: all three languages read the appositive as a vocative
+    # ("O false gods, turn away from your idols"). Verified 2026-09-20 across 5
+    # sentences x 3 languages against a 27B multilingual grader.
+    # "an idol" must lose its article too, or the translator is handed
+    # "an false god" — IndicTrans2 tolerates it, but feeding a model
+    # ungrammatical English to fix a different bug is how the next one starts.
+    (r"\ban\s+idol\b", "a false god"),
+    (r"\bidols\b", "false gods"),
+    (r"\bidol\b", "false god"),
 )
 
 # --- Terminology glossary ---
