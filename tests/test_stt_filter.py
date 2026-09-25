@@ -117,3 +117,19 @@ def test_repetition_is_caught_by_compression_not_confidence():
     """
     assert keep_segment(**seg("is legally is legally is legally is legally",
                               avg_logprob=-1.338, compression_ratio=2.6)) is False
+
+def test_hotwords_and_prompt_are_never_sent_together(monkeypatch):
+    """Measured 2026-09-20 on clips the tee captured from a live service:
+    sending hotwords AND initial_prompt together overflows Whisper's prompt
+    budget and the decoder loops — 42 stutters per 100 words, where either one
+    alone scored zero. Nothing raises, so it is pinned here."""
+    import stt
+
+    monkeypatch.setattr(stt, "WHISPER_HOTWORDS", "Ephesians Hosanna")
+    monkeypatch.setattr(stt, "WHISPER_INITIAL_PROMPT", "Good morning, church.")
+    assert stt._hotwords() is None
+
+    # Either one alone was measured clean, so neither is suppressed alone.
+    monkeypatch.setattr(stt, "WHISPER_INITIAL_PROMPT", None)
+    assert stt._hotwords() == "Ephesians Hosanna"
+

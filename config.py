@@ -124,7 +124,30 @@ WHISPER_INITIAL_PROMPT = (
 
 # Boosted vocabulary — proper nouns and terms Whisper most often mangles.
 # Add your church's names (pastor, congregation, places) to the end of this.
-WHISPER_HOTWORDS = (
+# MEASURED 2026-09-20, on 7 clips from the tee that stuttered live: passing
+# hotwords AND an initial_prompt together produced 42.4 stutters per 100 words.
+# Dropping EITHER one produced ZERO — the two are not independently harmful,
+# their SUM is:
+#
+#   hotwords+prompt  'from from from from from the'
+#   prompt only      'from Catalina Island to the'
+#   hotwords only    'from Catalina Island to the'
+#
+# faster-whisper builds one decoder prompt out of both. At 870 + 502 chars this
+# runs past Whisper's ~224-token prompt allowance, the context is truncated
+# mid-stream, and the decoder answers by looping. Every "off off off off" and
+# "drink is drink is drink is drink" on the wall came from here, not from the
+# mixer and not from the room.
+#
+# The prompt is kept rather than the hotwords because it already carries this
+# vocabulary IN CONTEXT — "Ephesians", "Jesus Christ", "Holy Spirit", "grace",
+# "mercy" all appear in it — while also setting the register the hotword list
+# cannot: sermons here are KJV-quoting AND everyday speech.
+#
+# The curated list survives below for anyone who would rather drop the prompt.
+# stt.py refuses to send both, so re-enabling this alone is safe; re-enabling
+# it ALONGSIDE the prompt is the regression this comment exists to prevent.
+SERMON_HOTWORDS = (
     "Jesus Christ Jehovah Yahweh Holy Spirit Hallelujah Amen Hosanna "
     "Genesis Exodus Leviticus Deuteronomy Joshua Samuel Nehemiah Psalms "
     "Proverbs Ecclesiastes Isaiah Jeremiah Ezekiel Daniel Hosea Malachi "
@@ -159,6 +182,10 @@ WHISPER_HOTWORDS = (
     # translated the wrong proper noun.
     "Tarshish Joppa Samaria Gethsemane Golgotha Zion"
 )
+
+# Active choice: the prompt, not the hotwords. See the measurement above.
+WHISPER_HOTWORDS = None
+
 
 # --- Sentence assembly (translation side only) ---
 # The screens get English the moment Whisper produces it, but a fragment must

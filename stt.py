@@ -23,6 +23,24 @@ def _normalize(text):
     return " ".join(_NON_WORD.sub(" ", text.lower()).split())
 
 
+def _hotwords():
+    """The hotword list, but only when nothing else is claiming the prompt.
+
+    Silently dropping one of two conflicting settings is normally a bad habit;
+    here the alternative is worse. The conflict is invisible (no exception, no
+    warning — just captions that read "up up up up up up"), and it cost a live
+    service to find. A loud log line and a working decode beats a faithful
+    reproduction of a misconfiguration.
+    """
+    if WHISPER_HOTWORDS and WHISPER_INITIAL_PROMPT:
+        logger.warning(
+            "Both WHISPER_HOTWORDS and WHISPER_INITIAL_PROMPT are set; sending "
+            "only the prompt. Together they overflow Whisper's prompt budget "
+            "and the decoder repeats itself — see config.py.")
+        return None
+    return WHISPER_HOTWORDS or None
+
+
 def _field(segment, name, default):
     """Read from either a faster-whisper Segment or a plain dict."""
     if isinstance(segment, dict):
@@ -108,6 +126,10 @@ class WhisperSTT:
             # 0, so the first segment of every call still sees the prompt.
             condition_on_previous_text=False,
             initial_prompt=WHISPER_INITIAL_PROMPT,
-            hotwords=WHISPER_HOTWORDS,
+            # NEVER both — see the measurement on WHISPER_HOTWORDS in config.
+            # faster-whisper folds hotwords and initial_prompt into one decoder
+            # prompt; past ~224 tokens it truncates and the decoder loops, at a
+            # measured 42 stutters per 100 words. Either alone scored zero.
+            hotwords=_hotwords(),
         )
         return strip_hallucinations(segments)
