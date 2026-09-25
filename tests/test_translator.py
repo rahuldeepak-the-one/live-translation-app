@@ -729,3 +729,48 @@ def test_idolatry_is_left_alone():
     from translator import apply_source_rewrites
     assert apply_source_rewrites("This is idolatry.") == "This is idolatry."
     assert apply_source_rewrites("an idolater") == "an idolater"
+
+
+# --- Clause split: long run-ons are cut before IndicTrans2 drops clauses -----
+
+# 2026-09-20 11:54:44, verbatim. As one row, ml lost its first half and te its
+# second; as clauses, every language kept every clause.
+RUN_ON = ("I'm not here, I'm not here advocating anything that you should should "
+          "should No, no, but we need, you are primarily here Of course, of course "
+          "even through our work we can a believer, a senior believer a company in "
+          "in in in in in in in in in in in in in a noble in his group knew that he "
+          "was a See?")
+
+
+def test_a_long_run_on_is_cut_at_clause_starts_and_loses_nothing():
+    from translator import split_long_sentence, CLAUSE_SPLIT_CHARS
+    pieces = split_long_sentence(RUN_ON)
+    assert len(pieces) > 1
+    assert " ".join(pieces) == RUN_ON
+    assert all(len(p) <= CLAUSE_SPLIT_CHARS for p in pieces), pieces
+
+
+def test_short_sentences_are_never_split():
+    """Short pieces are the fragments a verb-final target invents verbs for."""
+    from translator import split_long_sentence
+    s = "He kept his eyes on the finish So he kept running the race"
+    assert split_long_sentence(s) == [s]
+
+
+def test_a_name_after_a_function_word_is_not_a_clause_start():
+    from translator import split_long_sentence
+    s = ("and we were encouraged every single day by the Lord and by the Holy "
+         "Spirit and by brother Emmanuel who has been faithfully serving this "
+         "congregation and this city for many many years and we are grateful")
+    assert split_long_sentence(s) == [s]
+
+
+def test_a_split_sentence_is_still_one_result_and_one_generate_call():
+    from translator import split_long_sentence
+    n_rows = len(split_long_sentence(RUN_ON)) + 1          # + "Amen."
+    t = _translator_with_fake_model(decoded=_decoded_for(n_rows))
+    out = _run_with_timeout(lambda: t.translate_sentences_sync([RUN_ON, "Amen."]))
+
+    assert len(out) == 2                                  # the caller's units
+    assert t.model.generate_calls == 1
+    assert len(t.tokenizer.seen_batch) == n_rows * 3      # finer rows inside

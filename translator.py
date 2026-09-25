@@ -63,6 +63,53 @@ def split_source_sentences(text):
     return [p.strip() for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p.strip()]
 
 
+# A run-on Whisper never punctuated reaches the model as ONE row, and past a few
+# hundred characters IndicTrans2 silently drops whole clauses — a different
+# clause in each language, so the lanes disagree. 7 of 21 lines over 120 chars
+# on 2026-09-20; 11:54:44 lost its first half in ml and its second in te.
+# Deterministic, and not the repetition guards: turning them off recovered one
+# language of one line. Splitting where Whisper capitalised a new clause
+# without a full stop recovered every clause in every language tested.
+#
+# Only above CLAUSE_SPLIT_CHARS, because short pieces are the fragments the
+# 2026-08-21 fix exists to keep away from a verb-final target. Pieces are
+# packed back up to that length, so a line is cut only as often as it must be.
+CLAUSE_SPLIT_CHARS = 200
+_CLAUSE_START = re.compile(r"(?<=[a-z,])\s+(?=(?!I\b)[A-Z])")
+# A capital after these, or after another capitalised word, is a name inside
+# the clause — "by the Holy Spirit", "brother Emmanuel" — not a new clause.
+_CLAUSE_GLUE = frozenset(
+    "a an the of to in into on at by for from with and or but nor as than that "
+    "my our your his her its their this these those brother sister pastor dear "
+    "saint".split()
+)
+
+
+def split_long_sentence(sentence):
+    """Pieces of an over-long sentence, each translated as its own row.
+
+    " ".join(result) == sentence, always: nothing is added or lost here.
+    """
+    if len(sentence) <= CLAUSE_SPLIT_CHARS:
+        return [sentence]
+    clauses = []
+    for part in _CLAUSE_START.split(sentence):
+        last = clauses[-1].split()[-1] if clauses else ""
+        if last and (last[0].isupper() or last.lower().strip(",") in _CLAUSE_GLUE):
+            clauses[-1] += " " + part
+        else:
+            clauses.append(part)
+    pieces = []
+    for clause in clauses:
+        if pieces and len(pieces[-1]) + 1 + len(clause) <= CLAUSE_SPLIT_CHARS:
+            pieces[-1] += " " + clause
+        else:
+            pieces.append(clause)
+    if len(pieces) > 1 and len(pieces[-1].split()) < 5:
+        pieces[-2] += " " + pieces.pop()
+    return pieces
+
+
 def apply_glossary(lang, text):
     """Pin agreed terminology. Stem-level, so inflectional suffixes survive.
 
@@ -182,7 +229,7 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
         self.processors = _make_processors()
         logger.info("IndicTrans2 loaded.")
 
-    def _generate(self, sentences, langs):
+    def _generate(self, sentences, langs, split=True):
         """One batched generate: every sentence x every language, one call.
 
         Sentences are separate batch rows rather than one concatenated input,
@@ -197,6 +244,11 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
         """
         if isinstance(sentences, str):
             sentences = [sentences]
+        # Callers still get one output per sentence; only the rows are finer.
+        # split=False for context mode, whose recovery step assumes the FIRST
+        # target sentence is the context's and drops it.
+        groups = [split_long_sentence(s) if split else [s] for s in sentences]
+        sentences = [piece for group in groups for piece in group]
         batch = []
         for lang in langs:
             batch.extend(
@@ -232,18 +284,22 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
             outs = self.processors[lang].postprocess_batch(
                 raws, lang=FLORES_CODES[lang]
             )
-            result[lang] = [
-                apply_glossary(lang, _postprocess(lang, o)) for o in outs
-            ]
+            pieces = [apply_glossary(lang, _postprocess(lang, o)) for o in outs]
+            result[lang], i = [], 0
+            for group in groups:
+                if i >= len(pieces):
+                    break
+                result[lang].append(" ".join(pieces[i:i + len(group)]))
+                i += len(group)
         return result
 
-    def _joined(self, sentences, langs):
+    def _joined(self, sentences, langs, split=True):
         """_generate, collapsed back to one string per language.
 
         The chunk-level API still wants a single string; Stage 2's per-sentence
         API does not. One generate call either way.
         """
-        per_sentence = self._generate(sentences, langs)
+        per_sentence = self._generate(sentences, langs, split)
         return {lang: " ".join(parts) for lang, parts in per_sentence.items()}
 
     def translate_sentences_sync(self, sentences, context=""):
@@ -291,7 +347,7 @@ class IndicTrans2Translator(_AsyncTranslatorBase):
 
         # Context mode keeps the single-input path: the recovery step drops the
         # context's translation, which only makes sense on one joined output.
-        joined = self._joined([f"{ctx} {text}"], TARGET_LANGS)
+        joined = self._joined([f"{ctx} {text}"], TARGET_LANGS, split=False)
 
         # Recovery. ctx is always exactly one sentence, so exactly one target
         # sentence is dropped. If what is left has fewer sentences than the
