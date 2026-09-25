@@ -5,6 +5,7 @@ Translation is deferred until the sentence is actually complete — see
 config.SENTENCE_END_CHARS for why a fragment must never reach the translator.
 """
 import logging
+import re
 import time
 
 from config import (SENTENCE_END_CHARS, MAX_SENTENCE_HOLD_S, MAX_PENDING_CHARS,
@@ -133,7 +134,7 @@ class UtterancePipeline:
     async def process(self, audio_np):
         t0 = self._clock()
         text = await self.stt.transcribe(audio_np)
-        if not text:
+        if not text or not re.search(r"\w", text):   # "." alone is debris
             return None
         t_stt = self._clock() - t0
 

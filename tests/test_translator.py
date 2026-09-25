@@ -774,3 +774,11 @@ def test_a_split_sentence_is_still_one_result_and_one_generate_call():
     assert len(out) == 2                                  # the caller's units
     assert t.model.generate_calls == 1
     assert len(t.tokenizer.seen_batch) == n_rows * 3      # finer rows inside
+
+
+def test_punctuation_debris_is_never_a_sentence():
+    """2026-09-20 11:50:14, one looping chunk, verbatim: twelve bare "." rows."""
+    from translator import split_source_sentences
+    chunk = "That is step one's a I is step is step . That is is . . .  is . . . . . . . . . . ."
+    assert split_source_sentences(chunk) == [
+        "That is step one's a I is step is step .", "That is is .", "is ."]

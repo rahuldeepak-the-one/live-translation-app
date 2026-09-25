@@ -59,8 +59,13 @@ def apply_source_rewrites(text):
 
 
 def split_source_sentences(text):
-    """Split English into sentences for independent translation."""
-    return [p.strip() for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p.strip()]
+    """Split English into sentences for independent translation.
+
+    A part with no word in it is decoder debris — 2026-09-20 put twelve bare
+    "." rows on the wall from one looping chunk — so it is never a sentence.
+    """
+    return [p.strip() for p in re.split(r"(?<=[.!?])\s+", text.strip())
+            if re.search(r"\w", p)]
 
 
 # A run-on Whisper never punctuated reaches the model as ONE row, and past a few
