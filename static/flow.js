@@ -26,6 +26,12 @@ export class Flow {
     return this.order.length === 0;
   }
 
+  /* Every sentence, oldest first. /view's recap mode scores these client-side;
+     the phone already holds the whole service, so a recap costs no round trip. */
+  get all() {
+    return this.order.map((id) => this.sentences.get(id));
+  }
+
   setLang(lang) {
     this.lang = lang;
     for (const id of this.order) this._paint(this.sentences.get(id));
@@ -84,7 +90,13 @@ export class Flow {
     }
   }
 
-  _textFor(s) {
+  /* The rendered span for a sentence, so a caller can scroll it into view.
+     /view's recap taps through to the live transcript. */
+  spanFor(id) {
+    return this.spans.get(id);
+  }
+
+  textFor(s) {
     if (this.lang === "en") return { text: s.en, awaiting: false };
     const translated = s.translations?.[this.lang];
     return translated
@@ -100,7 +112,7 @@ export class Flow {
       this.spans.set(s.id, span);
       this.container.appendChild(span);
     }
-    const { text, awaiting } = this._textFor(s);
+    const { text, awaiting } = this.textFor(s);
     span.textContent = `${text} `;   // trailing space so the paragraph wraps
     span.classList.toggle("awaiting", awaiting);
     // The correction contract: grey while the server may still revise this

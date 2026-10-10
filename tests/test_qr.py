@@ -51,3 +51,13 @@ def test_different_urls_produce_different_codes():
 def test_same_url_is_stable():
     url = "http://192.168.1.29:8080/view"
     assert svg_for(url) == svg_for(url)
+
+
+def test_the_scheme_is_carried_into_the_url():
+    """Under TLS the QR must say https, or every phone that scans it lands on
+    an address the server is not listening on in plain text."""
+    assert view_url_for("192.168.1.29:8080", "https") == "https://192.168.1.29:8080/view"
+
+
+def test_a_rejected_host_is_still_rejected_under_https():
+    assert view_url_for("evil.com/../x", "https") is None

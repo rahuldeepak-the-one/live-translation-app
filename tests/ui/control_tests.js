@@ -73,6 +73,43 @@ async function run() {
   laneBtn("ml").click();
   check("refuses to disable the last lane", sent(ws).length === before,
         `sent ${sent(ws).length - before} messages`);
+
+
+  // --- language names must never be clipped -------------------------------
+  // A reader picks their language by the shape of its own script. "മലയാ…ളം"
+  // was what the 3-column row actually rendered.
+  const clipped = [...doc.querySelectorAll("#lanes button, #focus button")]
+    .filter((b) => b.scrollWidth > b.clientWidth + 1)
+    .map((b) => `${b.textContent.trim()} (${b.scrollWidth}>${b.clientWidth})`);
+  check("no language label is truncated", clipped.length === 0, clipped.join(", ") || "none");
+
+  // --- clearing the wall takes two taps -----------------------------------
+  // The one irreversible control on the page: it wipes the scrollback from
+  // every phone in the building. A pocket tap must not be enough.
+  const clear = doc.getElementById("clear-wall");
+  check("clear control exists", !!clear);
+
+  const wallMsgs = () => sent(ws).filter((m) => m.type === "wall");
+  clear.click();
+  check("one tap sends nothing", wallMsgs().length === 0,
+        JSON.stringify(sent(ws).slice(-1)));
+  check("one tap arms and says so",
+        clear.classList.contains("armed") && /again/i.test(clear.textContent),
+        clear.textContent.trim());
+
+  clear.click();
+  check("the second tap clears",
+        wallMsgs().length === 1 && wallMsgs()[0].action === "clear",
+        JSON.stringify(wallMsgs()));
+  check("it disarms after firing", !clear.classList.contains("armed"),
+        clear.textContent.trim());
+
+  // Back to a resting state, so the next tap starts the two-step over again
+  // rather than firing immediately.
+  clear.click();
+  check("a later tap re-arms rather than clearing again",
+        clear.classList.contains("armed") && wallMsgs().length === 1,
+        `${wallMsgs().length} clears sent`);
 }
 
 finish(run());

@@ -8,7 +8,7 @@ class StubSTT:
         self.text = text
 
     async def transcribe(self, audio_np):
-        return self.text
+        return self.text, "en"
 
 
 class StubTranslator:
@@ -64,7 +64,9 @@ class SeqSTT:
         self.texts = list(texts)
 
     async def transcribe(self, audio_np):
-        return self.texts.pop(0) if self.texts else ""
+        """Each entry is text, or (text, lang) for a non-English chunk."""
+        item = self.texts.pop(0) if self.texts else ""
+        return item if isinstance(item, tuple) else (item, "en")
 
 
 class FakeClock:
@@ -1120,3 +1122,42 @@ async def test_english_is_published_before_the_previous_sentence_is_translated()
 
     seq = [(m["type"], m.get("id")) for m in screen.sent]
     assert seq.index(("sentence", 2)) < seq.index(("translation", 1)), seq
+
+
+# --- 5-language upgrade: a chunk not in English ------------------------------
+
+async def test_a_non_english_chunk_is_shown_as_said_and_never_welded():
+    """The translator is en->indic only, so a Malayalam chunk cannot be
+    translated; it must still reach its own lane, and must not be joined onto
+    the English sentence held before it."""
+    hub = BroadcastHub()
+    screen = FakeWS()
+    await hub.register(screen)
+    pipe = UtterancePipeline(
+        SeqSTT("and the steward said", ("ദൈവം സ്നേഹമാണ്", "ml")),
+        StubTranslator(), hub)
+
+    await pipe.process(None)                       # held: unfinished English
+    sid, text = await pipe.process(None)
+
+    assert text == "ദൈവം സ്നേഹമാണ്"
+    translations = [m for m in screen.sent if m["type"] == "translation"]
+    # the held English was flushed and translated first, under its own id
+    assert translations[0]["ml"] == "ml:and the steward said"
+    assert translations[-1]["id"] == sid
+    # as said, in every lane: "" would read as a failed translation on the wall
+    assert translations[-1]["ml"] == translations[-1]["te"] == "ദൈവം സ്നേഹമാണ്"
+
+
+def test_language_choice_defaults_to_english_for_an_accent():
+    from functools import partial
+    import stt
+    # The five, not config's current set: this tests the rule, and config may
+    # run English-only (it does since the 2026-10-10 turbo rollback).
+    choose_language = partial(stt.choose_language, allowed=("en", "ml", "hi", "pa", "te"))
+    # Indian-accented English read as Hindi, but not convincingly
+    assert choose_language([("hi", 0.42), ("en", 0.40), ("ur", 0.1)]) == "en"
+    # a language outside the five never takes the chunk, however sure
+    assert choose_language([("ur", 0.9), ("en", 0.05)]) == "en"
+    assert choose_language([("ml", 0.81), ("en", 0.1)]) == "ml"
+    assert choose_language([("en", 0.97)]) == "en"

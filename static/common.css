@@ -1,12 +1,53 @@
-/* Shared look for all caption screens — dark, high-contrast, projector-friendly */
-:root { color-scheme: dark; }
+/* Shared shell for the screens people HOLD — /view, /control, /status.
+ *
+ * PALETTE: the dark half of the projector wall's token set, name for name (see
+ * static/display.css). The wall flips light/dark with the hall; these pages
+ * never do — a phone read in a dark church stays dark — so they take the dark
+ * values and only the dark values. That is why the tokens are copied here
+ * rather than shared through one file: sharing would let a change to the wall's
+ * theme flip the phones with it, which is the thing display.css was split out
+ * to prevent. tests/test_theme_tokens.py pins the two copies together so they
+ * cannot quietly drift back apart.
+ *
+ * FONT: identical stack and identical ORDER to display.css. Leading with
+ * system-ui (as this file used to) renders Latin text in the OS UI font on a
+ * phone and in Noto Sans on the wall — the same sentence in two typefaces
+ * depending on which screen you read it from.
+ */
+:root {
+  color-scheme: dark;
+
+  /* --- shared with display.css (dark) — keep in sync, see the test --------- */
+  --page-bg: #0b0f14;
+  --card-bg: #0e141b;
+  --card-border: #1c2733;
+  --text-confirmed: #e8eef5;
+  --text-pending: #6b7c8f;
+  --text-muted: #5b6e83;
+  --text-secondary: #7d8fa3;
+  --live-dot: #22c55e;
+  --warn-dot: #f59e0b;
+
+  /* --- phone-only: the wall has nothing to press and never disconnects ----- */
+  --down-dot: #ef4444;
+  --accent: #1d4ed8;
+  --accent-edge: #3b82f6;
+  /* The shell/hairline pair controls are nested in. Deliberately translucent
+     rather than a flat colour: these sit on several different backgrounds. */
+  --shell: rgba(255, 255, 255, 0.035);
+  --hairline: rgba(255, 255, 255, 0.075);
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  background: #0b0f14;
-  color: #e8eef5;
-  font-family: system-ui, "Noto Sans", "Noto Sans Malayalam", "Noto Sans Telugu",
-               "Noto Sans Devanagari", sans-serif;
+  background: var(--page-bg);
+  color: var(--text-confirmed);
+  /* No webfont <link>. The hall has no internet (see qr.py), so a Google Fonts
+     request fails closed. The Noto families are installed on the host. */
+  font-family: "Noto Sans", "Noto Sans Telugu", "Noto Sans Malayalam",
+               "Noto Sans Devanagari", "Noto Sans Gurmukhi", system-ui, sans-serif;
   /* Pin the page to the viewport so <main> is the scroll container. With
      min-height the body just grows with the captions, main never overflows,
      and there is nothing to scroll back through. dvh excludes mobile browser
@@ -20,15 +61,15 @@ body {
 
 header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 0.6rem 1.2rem; font-size: 0.9rem; color: #7d8fa3;
-  border-bottom: 1px solid #1c2733;
+  padding: 0.6rem 1.2rem; font-size: 0.9rem; color: var(--text-secondary);
+  border-bottom: 1px solid var(--card-border);
 }
 
 #status-dot {
   display: inline-block; width: 0.7em; height: 0.7em; border-radius: 50%;
-  background: #ef4444; margin-right: 0.4em;
+  background: var(--down-dot); margin-right: 0.4em;
 }
-#status-dot.connected { background: #22c55e; }
+#status-dot.connected { background: var(--live-dot); }
 
 main { flex: 1; overflow-y: auto; padding: 1.2rem; display: flex;
        flex-direction: column; gap: 1.4rem; }
@@ -38,23 +79,13 @@ main { flex: 1; overflow-y: auto; padding: 1.2rem; display: flex;
    clientHeight, so content overflowing the top becomes permanently
    unreachable — you cannot scroll back to older captions at all. A zero-height
    first flex item with `margin-top: auto` gets the same look and keeps the
-   overflow scrollable. Verified in tests/ui/. */
-main::before { content: ""; margin-top: auto; }
+   overflow scrollable. Verified in tests/ui/.
+   
+   Scoped to #captions, NOT to every <main>. As a bare `main::before` it also
+   bottom-pinned /control, which is a panel of buttons and not a caption feed —
+   it shipped with 367px of empty space above its first control on an 844px
+   phone. Only /view grows upward. */
+#captions::before { content: ""; margin-top: auto; }
 
-.caption-row { border-left: 4px solid #2b3948; padding-left: 1rem; }
-.caption-row:last-child { border-left-color: #3b82f6; }
-
-.lang-line { display: flex; gap: 0.8rem; align-items: baseline; margin: 0.35rem 0; }
-.lang-tag {
-  flex: 0 0 2.6em; font-size: 0.55em; font-weight: 700; letter-spacing: 0.08em;
-  color: #7d8fa3; text-transform: uppercase;
-}
-.lang-text { flex: 1; }
-.lang-line.pending .lang-text { color: #4b5a6a; font-style: italic; }
-
-.empty-state { color: #4b5a6a; text-align: center; margin: auto; font-size: 1.4rem; }
-
-/* Projector lane styles used to live here. The wall is now a card grid with
-   its own light/dark tokens and owns its whole stylesheet — see
-   static/display.css. This file stays dark on purpose: /view and /control are
-   read on phones, often in a dark hall, and must not follow the wall. */
+.empty-state { color: var(--text-muted); text-align: center; margin: auto;
+               font-size: 1.4rem; }

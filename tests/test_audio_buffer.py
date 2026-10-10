@@ -152,3 +152,27 @@ def test_trailing_silence_stops_at_the_last_speech_not_the_buffer_start():
     buf.add_chunk(silence(0.8))
     measured = buf.trailing_silence_seconds()
     assert 0.6 <= measured <= 0.95, measured
+
+
+def _feed(buf, pcm, chunk_s=0.1):
+    """Feed in feed-mic.py-sized chunks, checking for a cut after each, the way
+    ws_mic does. Returns the first cut's (reason, audio) or None."""
+    step = int(chunk_s * SAMPLE_RATE) * 2
+    for i in range(0, len(pcm), step):
+        buf.add_chunk(pcm[i:i + step])
+        reason = buf.cut_reason()
+        if reason:
+            return reason, buf.get_audio_and_clear()
+    return None
+
+
+def test_long_silence_then_speech_cuts_only_the_speech():
+    """G2: a silent buffer was never cleared, so after a quiet stretch the first
+    loud window found MAX_BUFFER_S already exceeded and forced a mid-word cut
+    carrying a minute of silence along with it."""
+    buf = AudioBuffer(SAMPLE_RATE)
+    assert _feed(buf, silence(60.0)) is None
+    assert _feed(buf, loud(2.0)) is None
+    reason, audio = _feed(buf, silence(0.7))
+    assert reason == "silence"
+    assert len(audio) / SAMPLE_RATE < 2.0 + 0.7 + 0.7   # speech + tail + lead-in

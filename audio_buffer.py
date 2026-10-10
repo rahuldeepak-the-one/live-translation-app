@@ -14,6 +14,14 @@ class AudioBuffer:
 
     def add_chunk(self, pcm_bytes):
         self.buffer.extend(pcm_bytes)
+        # A buffer with no speech is never cut, so without this it grows for as
+        # long as the room is quiet, and the first word after a long pause
+        # finds MAX_BUFFER_S already exceeded: a forced mid-word cut carrying
+        # minutes of silence. Keep only a SILENCE_DURATION_S lead-in, so a
+        # soft onset below the threshold still reaches Whisper.
+        keep = int(SILENCE_DURATION_S * self.sample_rate) * 2
+        if len(self.buffer) > keep and not self.has_speech():
+            del self.buffer[:-keep]
 
     def duration_seconds(self):
         return len(self.buffer) / (self.sample_rate * 2)  # int16 = 2 bytes

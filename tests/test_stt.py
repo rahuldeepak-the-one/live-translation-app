@@ -12,5 +12,5 @@ def stt():
 
 async def test_silence_transcribes_to_empty(stt):
     silence = np.zeros(2 * 16000, dtype=np.int16)
-    text = await stt.transcribe(silence)
+    text, _lang = await stt.transcribe(silence)
     assert text == ""

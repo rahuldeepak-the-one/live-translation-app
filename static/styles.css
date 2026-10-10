@@ -3,39 +3,50 @@
    Design System & Styles
    ============================================================ */
 
-/* --- Google Fonts: Noto Sans (excellent Indic script coverage) --- */
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,300;0,400;0,600;0,700;0,800&family=Noto+Sans+Malayalam:wght@400;700&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Sans+Telugu:wght@400;700&display=swap');
+/* --- Fonts: installed on the host, NOT fetched -----------------------------
+   This was an @import of fonts.googleapis.com. The hall has no internet (see
+   qr.py), and a remote @import is render-blocking until it fails — on the one
+   page that has to work before the service can start. Every family it asked
+   for is already installed locally (fc-list: 2 faces each of Noto Sans
+   Malayalam / Telugu / Devanagari), so it bought nothing. display.css made the
+   same call, with the same reasoning, in its own comment. */
 
 /* --- CSS Custom Properties (Design Tokens) --- */
 :root {
-  /* Background */
-  --bg-primary: #06060a;
-  --bg-secondary: #0f0f18;
-  --bg-card: #12121e;
-  --bg-glass: rgba(255, 255, 255, 0.04);
-  --bg-glass-hover: rgba(255, 255, 255, 0.08);
+  /* Background — the wall's dark tokens (display.css), name-for-name values.
+     This page used to run its own near-black #06060a with an indigo/violet
+     gradient, so the microphone page looked like a different application from
+     every other screen in the building. */
+  --bg-primary: #0b0f14;        /* = --page-bg      */
+  --bg-secondary: #0e141b;      /* = --card-bg      */
+  --bg-card: #0e141b;
+  --bg-glass: rgba(255, 255, 255, 0.035);
+  --bg-glass-hover: rgba(255, 255, 255, 0.075);
 
   /* Text */
-  --text-primary: #f0f0f5;
-  --text-secondary: #9ca3af;
-  --text-muted: #5b6078;
-  --text-interim: #6366f1;
+  --text-primary: #e8eef5;      /* = --text-confirmed */
+  --text-secondary: #7d8fa3;    /* = --text-secondary */
+  --text-muted: #5b6e83;        /* = --text-muted     */
+  --text-interim: #3b82f6;
 
-  /* Accent */
-  --accent-indigo: #6366f1;
-  --accent-violet: #8b5cf6;
-  --accent-gradient: linear-gradient(135deg, #6366f1, #8b5cf6);
-  --accent-glow: rgba(99, 102, 241, 0.3);
+  /* Accent — ONE, the same blue /view, /control and /status use. */
+  --accent-indigo: #1d4ed8;
+  --accent-violet: #3b82f6;
+  --accent-gradient: linear-gradient(135deg, #1d4ed8, #3b82f6);
+  --accent-glow: rgba(29, 78, 216, 0.28);
 
-  /* Status Colors */
-  --status-idle: #6b7280;
-  --status-listening: #22c55e;
-  --status-translating: #f59e0b;
+  /* Status Colors — these already matched the wall and are unchanged. */
+  --status-idle: #5b6e83;
+  --status-listening: #22c55e;  /* = --live-dot */
+  --status-translating: #f59e0b;/* = --warn-dot */
   --status-error: #ef4444;
 
   /* Sizing */
-  --translated-font-size: 56px;
-  --source-font-size: 20px;
+  /* The heard sentence. Was a flat 56px from when this page was the projector
+     wall; at phone width that is barely one sentence on screen, and the point
+     of this page is reading BACK over several to check Whisper got them right. */
+  --heard-font-size: clamp(22px, 3.4vw, 34px);
+  --source-font-size: 15px;
   --header-height: 56px;
   --controls-height: 64px;
   --radius-sm: 8px;
@@ -44,7 +55,7 @@
   --radius-pill: 9999px;
 
   /* Shadows */
-  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.15);
+  --shadow-glow: 0 2px 14px rgba(11, 15, 20, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   --shadow-card: 0 2px 12px rgba(0, 0, 0, 0.4);
 
   /* Transitions */
@@ -70,7 +81,8 @@ html {
 }
 
 body {
-  font-family: 'Noto Sans', 'Noto Sans Malayalam', 'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif;
+  font-family: "Noto Sans", "Noto Sans Telugu", "Noto Sans Malayalam",
+               "Noto Sans Devanagari", "Noto Sans Gurmukhi", system-ui, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
   min-height: 100vh;
@@ -85,8 +97,8 @@ body::before {
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(ellipse at 20% 50%, rgba(99, 102, 241, 0.06) 0%, transparent 60%),
-    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.04) 0%, transparent 50%);
+    radial-gradient(ellipse at 20% 50%, rgba(29, 78, 216, 0.07) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(59, 130, 246, 0.05) 0%, transparent 50%);
   pointer-events: none;
   z-index: 0;
 }
@@ -113,9 +125,14 @@ body::before {
   gap: 10px;
 }
 
+.header__icon svg { width: 16px; height: 16px; }
+.btn-settings svg { width: 20px; height: 20px; display: block; }
+.btn-action svg { width: 15px; height: 15px; flex: none; }
+
 .header__icon {
   width: 28px;
   height: 28px;
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -431,8 +448,8 @@ body::before {
   }
 }
 
-.segment__translated {
-  font-size: var(--translated-font-size);
+.segment__heard {
+  font-size: var(--heard-font-size);
   font-weight: 700;
   line-height: 1.4;
   color: var(--text-primary);
@@ -440,7 +457,7 @@ body::before {
   overflow-wrap: break-word;
 }
 
-.segment__original {
+.segment__note {
   margin-top: 10px;
   font-size: var(--source-font-size);
   font-weight: 400;
@@ -493,9 +510,15 @@ body::before {
 }
 
 .empty-state__icon {
-  font-size: 56px;
-  opacity: 0.3;
+  /* Was a brain emoji at 56px. A waveform says what this page is waiting for;
+     a brain was a claim about the model. Inline SVG so it takes currentColor
+     and matches the icon treatment on /display. */
+  width: 128px;
+  margin: 0 auto;
+  color: var(--text-muted);
+  opacity: 0.55;
 }
+.empty-state__icon svg { width: 100%; height: auto; display: block; }
 
 .empty-state__title {
   font-size: 22px;
@@ -518,6 +541,11 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* The two halves used to butt together at exactly one x — no gutter — so on
+     a 390px phone the right block wrapped to two lines flush against
+     "English" and read as a collision. */
+  flex-wrap: wrap;
+  gap: 4px 16px;
   padding: 8px 20px;
   background: var(--bg-secondary);
   border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -578,8 +606,7 @@ body::before {
    ============================================================ */
 @media (max-width: 768px) {
   :root {
-    --translated-font-size: 40px;
-    --source-font-size: 16px;
+    --source-font-size: 14px;
     --header-height: 48px;
     --controls-height: auto;
   }
@@ -615,8 +642,7 @@ body::before {
 
 @media (max-width: 480px) {
   :root {
-    --translated-font-size: 32px;
-    --source-font-size: 15px;
+    --source-font-size: 13px;
   }
 
   .controls {
@@ -645,10 +671,10 @@ body.fullscreen-mode .display {
   padding: 48px 40px;
 }
 
-body.fullscreen-mode .segment__translated {
-  font-size: 72px;
+body.fullscreen-mode .segment__heard {
+  font-size: clamp(34px, 5vw, 56px);
 }
 
-body.fullscreen-mode .segment__original {
+body.fullscreen-mode .segment__note {
   font-size: 24px;
 }

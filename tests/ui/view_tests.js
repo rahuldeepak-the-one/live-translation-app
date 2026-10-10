@@ -16,6 +16,13 @@ async function run() {
   const spanFor = (id) => doc.querySelector(`[data-sid="${id}"]`);
   const captions = doc.getElementById("captions");
   const brightness = (el) => {
+    // Settle the 120ms colour fade before reading it. Under
+    // --virtual-time-budget the headless renderer can decline to give a CSS
+    // transition its first frame at all (startTime stays null, playState
+    // "running"), and getComputedStyle then reports the FROM colour forever —
+    // so a plain wait is a race that the page's own weight decides. This check
+    // is about the colour the reader ends up looking at, not the ramp there.
+    el.getAnimations().forEach((a) => a.finish());
     const [r, g, b] = win.getComputedStyle(el).color.match(/\d+/g).map(Number);
     return (r + g + b) / 3;
   };
@@ -146,6 +153,111 @@ async function run() {
     check("switching language re-renders existing text",
           spanFor(100).textContent.includes("తెలుగు"), spanFor(100).textContent.trim());
   }
+
+  // --- recap mode ---------------------------------------------------------
+  // The language picker was just switched to Telugu, so the recap must render
+  // Telugu too — it reuses the live lane's language resolution, not its own.
+  const modeLive = doc.getElementById("mode-live");
+  const modeRecap = doc.getElementById("mode-recap");
+  const recapPanel = doc.getElementById("recap-panel");
+  const refresh = doc.getElementById("recap-refresh");
+  check("mode switch exists", !!modeLive && !!modeRecap);
+
+  // Not offsetTop equality — the three zones are different heights and sit
+  // centred, so equal tops was never the question. Sharing a horizontal band is.
+  const headerRects = ["status", "mode-switch", "size-controls"]
+    .map((id) => doc.getElementById(id).getBoundingClientRect());
+  check("header keeps state, mode and size on one row",
+        Math.max(...headerRects.map((r) => r.top)) < Math.min(...headerRects.map((r) => r.bottom)),
+        headerRects.map((r) => `${r.top.toFixed(0)}-${r.bottom.toFixed(0)}`).join(" "));
+  check("header does not overflow the phone width",
+        doc.documentElement.scrollWidth <= win.innerWidth,
+        `${doc.documentElement.scrollWidth} > ${win.innerWidth}`);
+
+  // The 40 boilerplate sentences above are near-identical; a recap of them is
+  // noise and is SUPPOSED to be empty. Deliver a corpus with actual themes.
+  const CORPUS = [
+    [501, "The harvest is plentiful but the labourers are few in this field"],
+    [502, "A farmer went out to scatter seed across the whole field"],
+    [503, "Some seed fell on rocky ground where the soil was shallow"],
+    [504, "Other seed fell among thorns and the thorns choked the young plants"],
+    [505, "But seed that fell on good soil produced a harvest beyond measure"],
+    [506, "Amen"],
+    [507, "The soil is the heart and the seed is the word that is sown"],
+    [508, "A shallow heart receives the word gladly and loses it by Tuesday"],
+    [509, "Thorns are the worries of this life crowding out the word"],
+    [510, "Good soil is a heart that keeps the word and lets it work slowly"],
+    [511, "Let us sing"],
+    [512, "The harvest is plentiful but the labourers are few in this field"],
+  ];
+  for (const [id, en] of CORPUS) {
+    ws.deliver(sentence(id, en));
+    ws.deliver(translation(id));
+  }
+
+  modeRecap.click();
+  check("recap hides the live transcript", !visible(captions));
+  check("recap panel is shown", visible(recapPanel));
+  check("mode switch marks recap selected",
+        modeRecap.getAttribute("aria-selected") === "true"
+        && modeLive.getAttribute("aria-selected") === "false");
+  check("mode thumb slides rather than snapping",
+        win.getComputedStyle(doc.getElementById("mode-thumb")).transform !== "none",
+        win.getComputedStyle(doc.getElementById("mode-thumb")).transform);
+
+  const cards = $$("#recap-list .recap-card");
+  check("recap produced cards", cards.length >= 3, `cards=${cards.length}`);
+  check("recap is a selection, not the whole transcript",
+        cards.length < CORPUS.length, `cards=${cards.length} corpus=${CORPUS.length}`);
+  check("recap empty-state is not showing alongside cards",
+        !visible(doc.getElementById("recap-empty")));
+  check("recap says what it covered", $("#recap-meta").textContent.includes("key moment"),
+        $("#recap-meta").textContent);
+
+  const ids = cards.map((c) => Number(c.dataset.sid));
+  check("recap cards run in spoken order",
+        ids.every((v, i, a) => i === 0 || a[i - 1] < v), ids.join(","));
+  check("one-word filler is not a key moment", !ids.includes(506) && !ids.includes(511),
+        ids.join(","));
+  check("a restated sentence is not picked twice",
+        !(ids.includes(501) && ids.includes(512)), ids.join(","));
+  check("recap renders the chosen language",
+        $(".recap-text").textContent.includes("తెలుగు"), $(".recap-text").textContent);
+  check("recap cards are nested shell + core (not flat on the background)",
+        !!$(".recap-card > .recap-shell > .recap-core"));
+  check("recap reads from the top, not pinned to the bottom",
+        recapPanel.scrollTop === 0, recapPanel.scrollTop);
+  check("jump-to-live stays out of recap mode", !visible(pill));
+
+  await settle();
+  check("recap cards animate in rather than appearing statically",
+        cards[0].classList.contains("in"), cards[0].className);
+
+  // --- new sentences while reading the recap -------------------------------
+  check("no refresh offered when nothing is new", !visible(refresh));
+  ws.deliver(sentence(900, "A new thought arrives while you are reading back."));
+  check("refresh pill offers the new sentences", visible(refresh), refresh.textContent.trim());
+  check("recap did not reshuffle under the reader",
+        $$("#recap-list .recap-card").map((c) => c.dataset.sid).join(",") === ids.join(","));
+
+  // --- tap through to the live transcript ----------------------------------
+  const firstId = ids[0];
+  $$("#recap-list .recap-shell")[0].click();
+  check("tapping a recap card returns to live",
+        visible(captions) && !visible(recapPanel));
+  const landed = spanFor(firstId);
+  check("tapped sentence is marked where it landed",
+        landed && landed.classList.contains("flash"), landed && landed.className);
+
+  // A recap built from a short transcript is worse than none at all.
+  ws.deliver({ type: "history", sentences: [] });
+  for (let i = 1; i <= 3; i++) {
+    ws.deliver(sentence(700 + i, `Only a few words were said here number ${i}`));
+  }
+  modeRecap.click();
+  check("a barely-started service shows the empty state, not a fake recap",
+        visible(doc.getElementById("recap-empty"))
+        && $$("#recap-list .recap-card").length === 0);
 
   check("screen wake lock requested", win.__wakeLockCalls.includes("screen"),
         JSON.stringify(win.__wakeLockCalls));

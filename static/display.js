@@ -15,10 +15,10 @@ const MAX_SENTENCES = 400;        // bounds the cache over a long service
 
 // Native script, because the person who needs the label cannot read the other
 // three. English only ever labels the degenerate single-card case below.
-const LANG_LABELS = { en: "English", te: "తెలుగు", ml: "മലയാളം", hi: "हिन्दी" };
+const LANG_LABELS = { en: "English", te: "తెలుగు", ml: "മലയാളം", hi: "हिन्दी", pa: "ਪੰਜਾਬੀ" };
 
 const state = {
-  display: { lanes: ["en", "ml", "te", "hi"], focus: null, rotate: 0 },
+  display: { lanes: ["en", "ml", "te", "hi", "pa"], focus: null, rotate: 0 },
   sentences: new Map(),           // id -> {id, en, translations, final}
   order: [],
 };

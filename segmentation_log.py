@@ -50,7 +50,7 @@ class SegmentationLog:
         self._clock = clock
         self._pending = None
 
-    def record_cut(self, reason, chunk_s, trailing_silence_s):
+    def record_cut(self, reason, chunk_s, trailing_silence_s, audio=None):
         """A cut just happened. Flush any previous record and open a new one.
 
         A previous record still open here means speech never resumed before the
@@ -66,6 +66,9 @@ class SegmentationLog:
                 "trailing_silence_s": round(trailing_silence_s, 3),
                 "looked_complete": None,
                 "text": None,
+                # The tee's filename for this exact chunk, so a suspect line in
+                # this file can be listened to rather than theorised about.
+                "audio": audio,
                 "cut_at": self._clock(),
             }
         except Exception:

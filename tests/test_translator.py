@@ -21,7 +21,7 @@ def translator():
 @pytest.mark.slow
 async def test_translates_into_three_scripts(translator):
     out = await translator.translate_all("God is love and He loves the world.")
-    assert set(out.keys()) == {"ml", "te", "hi"}
+    assert set(out.keys()) == {"ml", "te", "hi", "pa"}
     assert has_script(out["ml"], ML), f"not Malayalam: {out['ml']}"
     assert has_script(out["te"], TE), f"not Telugu: {out['te']}"
     assert has_script(out["hi"], HI), f"not Hindi: {out['hi']}"
@@ -30,7 +30,7 @@ async def test_translates_into_three_scripts(translator):
 @pytest.mark.slow
 async def test_empty_text_returns_empties(translator):
     out = await translator.translate_all("")
-    assert out == {"ml": "", "te": "", "hi": ""}
+    assert out == {"ml": "", "te": "", "hi": "", "pa": ""}
 
 
 # --- Fast tests: real IndicProcessor, fake model/tokenizer (no GPU, no download) ---
@@ -41,7 +41,9 @@ DECODED = [
     "दैवं स्नेहमाण्, अवൻ लोकत्तॆ स्नेहिक्कुन्नु.",      # -> Malayalam
     "देवुडु प्रेम, आयन प्रपंचान्नि प्रेमिस्ताडु.",        # -> Telugu
     "ईश्वर प्रेम है और वह संसार से प्रेम करता है ।",   # -> Hindi
+    "ईश्वर प्रेम है और वह संसार से प्रेम करता है ।",   # -> Punjabi
 ]
+N_LANGS = len(DECODED)
 
 
 class _FakeEncoding(dict):
@@ -128,7 +130,7 @@ def test_translate_all_sync_postprocesses_every_language():
     t = _translator_with_fake_model()
     out = _run_with_timeout(lambda: t.translate_all_sync("God is love and He loves the world."))
 
-    assert set(out.keys()) == {"ml", "te", "hi"}
+    assert set(out.keys()) == {"ml", "te", "hi", "pa"}
     assert has_script(out["ml"], ML), f"not Malayalam: {out['ml']}"
     assert has_script(out["te"], TE), f"not Telugu: {out['te']}"
     assert has_script(out["hi"], HI), f"not Hindi: {out['hi']}"
@@ -140,7 +142,7 @@ def test_all_languages_share_one_generate_call():
     _run_with_timeout(lambda: t.translate_all_sync("God is love and He loves the world."))
 
     assert t.model.generate_calls == 1
-    assert len(t.tokenizer.seen_batch) == 3
+    assert len(t.tokenizer.seen_batch) == N_LANGS
     for tag, sent in zip(("mal_Mlym", "tel_Telu", "hin_Deva"), t.tokenizer.seen_batch):
         assert sent.startswith(f"eng_Latn {tag}"), sent
 
@@ -152,7 +154,7 @@ async def test_empty_text_short_circuits_without_model():
 
     t._lock = asyncio.Lock()
 
-    assert await t.translate_all("   ") == {"ml": "", "te": "", "hi": ""}
+    assert await t.translate_all("   ") == {"ml": "", "te": "", "hi": "", "pa": ""}
     assert t.model.generate_calls == 0
 
 
@@ -272,6 +274,21 @@ def test_nllb_fallback_normalizes_malayalam_output():
     out = t.translate_all_sync("his own")
 
     assert out["ml"] == "തന്റെ", f"got {out['ml']!r}"
+
+
+def test_nllb_fallback_serves_the_sentence_api():
+    """G1: the pipeline only calls translate_sentences(), which NLLB lacked, so
+    the moment IndicTrans2 failed to load every utterance raised and dropped."""
+    import asyncio
+    from config import TARGET_LANGS
+    t = _nllb_with_fake_model(["x"] * 100)
+    import translator as T
+    T._AsyncTranslatorBase.__init__(t)   # the fake skips __init__
+
+    out = asyncio.run(t.translate_sentences(["One.", "Two."]))
+
+    assert len(out) == 2
+    assert all(set(o) == set(TARGET_LANGS) for o in out)
 
 
 # --- Glossary ---------------------------------------------------------------
@@ -404,8 +421,9 @@ TWO_SENT = [
     "पहला वाक्य । दूसरा वाक्य ।",     # -> Malayalam
     "पहला वाक्य । दूसरा वाक्य ।",     # -> Telugu
     "पहला वाक्य । दूसरा वाक्य ।",     # -> Hindi
+    "पहला वाक्य । दूसरा वाक्य ।",     # -> Punjabi
 ]
-ONE_SENT = ["केवल एक ।"] * 3
+ONE_SENT = ["केवल एक ।"] * N_LANGS
 
 
 def test_context_is_prepended_to_the_source(context_on):
@@ -435,7 +453,7 @@ def test_the_context_translation_is_discarded(context_on):
     out = _run_with_timeout(lambda: t.translate_all_sync(
         "The real sentence.", context="The context sentence."))
 
-    for lang in ("ml", "te", "hi"):
+    for lang in ("ml", "te", "hi", "pa"):
         assert len(split_target_sentences_for_test(out[lang])) == 1, out[lang]
 
 
@@ -469,7 +487,7 @@ def test_no_context_behaves_exactly_as_before():
     out = _run_with_timeout(lambda: t.translate_all_sync("God is love."))
 
     assert t.model.generate_calls == 1
-    assert set(out) == {"ml", "te", "hi"}
+    assert set(out) == {"ml", "te", "hi", "pa"}
     for sent in t.tokenizer.seen_batch:
         assert sent.count("God is love") == 1
 
@@ -479,7 +497,7 @@ async def test_translate_all_accepts_context_keyword(context_on):
     t = _translator_with_fake_model([TWO_SENT])
     t._lock = asyncio.Lock()
     out = await t.translate_all("The real sentence.", context="The context one.")
-    assert set(out) == {"ml", "te", "hi"}
+    assert set(out) == {"ml", "te", "hi", "pa"}
 
 
 def test_split_drops_punctuation_only_debris():
@@ -502,7 +520,7 @@ def test_debris_context_triggers_the_integrity_guard(context_on):
     recovered text is short by one and the guard must retry without context
     rather than return a truncated caption.
     """
-    debris = [". . पहला असली वाक्य । दूसरा असली वाक्य ।"] * 3
+    debris = [". . पहला असली वाक्य । दूसरा असली वाक्य ।"] * N_LANGS
     t = _translator_with_fake_model([debris, DECODED])
     out = _run_with_timeout(lambda: t.translate_all_sync(
         "First real one. Second real one.", context="The context sentence."))
@@ -582,13 +600,13 @@ def test_multi_sentence_input_is_translated_one_sentence_at_a_time():
     alone is correct, so they go through as separate batch rows — still ONE
     generate call.
     """
-    t = _translator_with_fake_model([DECODED * 3])   # 3 langs x 3 sentences
+    t = _translator_with_fake_model([DECODED * 3])   # N_LANGS x 3 sentences
     _run_with_timeout(lambda: t.translate_all_sync(
         "First one. Second one. Third one."))
 
     assert t.model.generate_calls == 1, "must stay a single batched generate"
-    assert len(t.tokenizer.seen_batch) == 9, (
-        f"expected 3 languages x 3 sentences, got {len(t.tokenizer.seen_batch)}"
+    assert len(t.tokenizer.seen_batch) == 3 * N_LANGS, (
+        f"expected {N_LANGS} languages x 3 sentences, got {len(t.tokenizer.seen_batch)}"
     )
     # each row carries exactly one sentence
     for row in t.tokenizer.seen_batch:
@@ -600,8 +618,8 @@ def test_single_sentence_input_is_unchanged():
     t = _translator_with_fake_model()
     out = _run_with_timeout(lambda: t.translate_all_sync("God is love."))
     assert t.model.generate_calls == 1
-    assert len(t.tokenizer.seen_batch) == 3
-    assert set(out) == {"ml", "te", "hi"}
+    assert len(t.tokenizer.seen_batch) == N_LANGS
+    assert set(out) == {"ml", "te", "hi", "pa"}
 
 
 def test_per_sentence_output_is_rejoined_in_order():
@@ -629,7 +647,7 @@ def _decoded_for(n_sentences):
     then hi. The decode must match that shape or the per-sentence slicing has
     nothing to slice.
     """
-    return [DECODED[lang_i] for lang_i in range(3) for _ in range(n_sentences)]
+    return [DECODED[lang_i] for lang_i in range(N_LANGS) for _ in range(n_sentences)]
 
 
 def test_translate_sentences_returns_one_result_per_sentence():
@@ -645,7 +663,7 @@ def test_translate_sentences_returns_one_result_per_sentence():
     assert isinstance(out, list)
     assert len(out) == 3
     for row in out:
-        assert set(row.keys()) == {"ml", "te", "hi"}
+        assert set(row.keys()) == {"ml", "te", "hi", "pa"}
         assert has_script(row["ml"], ML), row["ml"]
         assert has_script(row["te"], TE), row["te"]
         assert has_script(row["hi"], HI), row["hi"]
@@ -664,7 +682,7 @@ def test_translate_sentences_still_uses_ONE_generate_call():
 
     assert t.model.generate_calls == 1, t.model.generate_calls
     # 3 sentences x 3 languages, all rows in the one batch
-    assert len(t.tokenizer.seen_batch) == 9, len(t.tokenizer.seen_batch)
+    assert len(t.tokenizer.seen_batch) == 3 * N_LANGS, len(t.tokenizer.seen_batch)
 
 
 def test_translate_sentences_keeps_sentences_in_order():
@@ -692,7 +710,7 @@ def test_translate_all_still_joins_for_existing_callers():
     """The chunk-level API must keep working while Stage 2 lands."""
     t = _translator_with_fake_model()
     out = _run_with_timeout(lambda: t.translate_all_sync("God is love. He loves the world."))
-    assert set(out.keys()) == {"ml", "te", "hi"}
+    assert set(out.keys()) == {"ml", "te", "hi", "pa"}
     assert isinstance(out["ml"], str)
 
 
@@ -773,7 +791,7 @@ def test_a_split_sentence_is_still_one_result_and_one_generate_call():
 
     assert len(out) == 2                                  # the caller's units
     assert t.model.generate_calls == 1
-    assert len(t.tokenizer.seen_batch) == n_rows * 3      # finer rows inside
+    assert len(t.tokenizer.seen_batch) == n_rows * N_LANGS      # finer rows inside
 
 
 def test_punctuation_debris_is_never_a_sentence():

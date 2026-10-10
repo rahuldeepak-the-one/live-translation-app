@@ -5,7 +5,7 @@ from display_state import KNOWN_LANGS, initial_state, validate
 
 def test_initial_state_shows_every_language():
     assert initial_state() == {
-        "lanes": ["en", "ml", "te", "hi"], "focus": None, "rotate": 0}
+        "lanes": ["en", "ml", "te", "hi", "pa"], "focus": None, "rotate": 0}
 
 
 def test_initial_state_is_not_shared_between_calls():
@@ -15,7 +15,7 @@ def test_initial_state_is_not_shared_between_calls():
 
 
 def test_known_langs_comes_from_config():
-    assert KNOWN_LANGS == ("en", "ml", "te", "hi")
+    assert KNOWN_LANGS == ("en", "ml", "te", "hi", "pa")
 
 
 def test_valid_state_passes_through_with_lane_order_preserved():

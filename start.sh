@@ -12,7 +12,7 @@ VENV_DIR="$SCRIPT_DIR/.venv"
 
 echo "======================================"
 echo "  Live Translation Server"
-echo "  Whisper + NLLB on Local GPU"
+echo "  Whisper + IndicTrans2 on Local GPU"
 echo "======================================"
 echo ""
 
@@ -54,6 +54,17 @@ else:
 # banner below and the server itself agree on it.
 export CONTROL_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(3))')"
 
+# --- TLS certificate ---
+# Optional since the capture page was deleted: nothing needs a secure browser
+# context any more, so a certless boot is a complete service and the cert only
+# keeps the caption stream off the clear. Regenerated only when absent; the SAN
+# covers whatever addresses the machine had at generation time, so re-run
+# make-cert.sh by hand after moving to a different WiFi.
+if [ ! -f "$SCRIPT_DIR/certs/server.crt" ]; then
+    "$SCRIPT_DIR/make-cert.sh"
+    echo ""
+fi
+
 # --- Show the URLs people should open ---
 # Not `hostname -I | awk '{print $1}'`: this machine has a dozen addresses
 # (docker bridges, k3s/flannel, a VPN tunnel) and that would happily print an
@@ -62,7 +73,15 @@ export CONTROL_TOKEN="$(python -c 'import secrets; print(secrets.token_hex(3))')
 echo ""
 python "$SCRIPT_DIR/netinfo.py"
 echo ""
-echo "🎤 Starting server..."
+# The server has no microphone of its own. feed-mic.py is the only ingress, and
+# it is deliberately NOT launched from here: it wants its own terminal for the
+# level meter, and coupling its lifetime to the server's would hide a mixer
+# that got unplugged behind a wall of uvicorn logs. It reconnects on a 2s
+# timer, so it can be started before or after this.
+echo "🎤 In a second terminal, feed the mixer in:"
+echo "      ./feed-mic.py yamaha"
+echo ""
+echo "Starting server..."
 echo "======================================"
 echo ""
 

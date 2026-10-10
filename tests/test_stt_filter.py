@@ -118,6 +118,7 @@ def test_repetition_is_caught_by_compression_not_confidence():
     assert keep_segment(**seg("is legally is legally is legally is legally",
                               avg_logprob=-1.338, compression_ratio=2.6)) is False
 
+
 def test_hotwords_and_prompt_are_never_sent_together(monkeypatch):
     """Measured 2026-09-20 on clips the tee captured from a live service:
     sending hotwords AND initial_prompt together overflows Whisper's prompt
@@ -133,3 +134,18 @@ def test_hotwords_and_prompt_are_never_sent_together(monkeypatch):
     monkeypatch.setattr(stt, "WHISPER_INITIAL_PROMPT", None)
     assert stt._hotwords() == "Ephesians Hosanna"
 
+
+def test_bare_you_from_silence_is_dropped():
+    """Measured 2026-09-20: with WHISPER_VAD_FILTER off, silence decodes to a
+    bare "you" with no_speech_prob=0.00 and avg_logprob=-0.63 — confident on
+    every numeric signal, so only a whole-segment word test catches it."""
+    assert not keep_segment("you", 0.0, -0.63, 0.27)
+    assert not keep_segment("You.", 0.0, -0.63, 0.27)
+
+
+def test_those_words_inside_a_real_sentence_survive():
+    """The reason this is not in HALLUCINATION_PHRASES: that list also matches
+    on startswith, and would take Matthew 5:14 with it."""
+    assert keep_segment("You are the light of the world.", 0.1, -0.4, 1.5)
+    # And "Thank you." stays kept — see test_bare_thank_you_is_still_kept.
+    assert keep_segment("Thank God for His mercy.", 0.1, -0.4, 1.5)

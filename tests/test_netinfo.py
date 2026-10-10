@@ -76,9 +76,11 @@ def test_current_ssid_is_none_when_not_on_wifi():
     assert current_ssid("") is None
 
 
-def test_banner_lists_all_three_pages():
+def test_banner_lists_the_pages_people_open():
     banner = startup_banner(8080, ROUTE, ADDRS, NMCLI)
-    for page in ("display", "view", "mic"):
+    # The microphone is ./feed-mic.py on this machine, not a URL, so it has
+    # no line here — printing one was how an operator ended up opening a tab.
+    for page in ("display", "view"):
         assert f"http://192.168.1.29:8080/{page}" in banner
 
 
@@ -103,6 +105,33 @@ def test_banner_prints_the_control_url_when_a_token_is_supplied():
     assert "/control/7f3a9c" in banner
 
 
+def test_banner_prints_the_control_room_url_too():
+    # The control room can stop the microphone, so it shares the wall's token —
+    # and an operator who cannot find the address may as well not have it.
+    banner = startup_banner(8080, ROUTE, ADDRS, control_token="7f3a9c")
+    assert "/status/7f3a9c" in banner
+
+
 def test_banner_omits_control_line_without_a_token():
     banner = startup_banner(8080, ROUTE, ADDRS)
     assert "/control" not in banner
+    assert "/status" not in banner
+
+
+def test_service_urls_carry_the_requested_scheme():
+    urls = service_urls(8080, ROUTE, ADDRS, "https")
+    assert urls[0] == ("wlp3s0", "https://192.168.1.29:8080")
+
+
+def test_the_banner_advertises_https_when_tls_is_on():
+    """The printed banner is how the operator learns which URL to open; an
+    http:// line against a TLS server is a connection reset with no clue why."""
+    banner = startup_banner(8080, ROUTE, ADDRS, NMCLI, scheme="https")
+    for page in ("display", "view"):
+        assert f"https://192.168.1.29:8080/{page}" in banner
+    assert "http://192.168.1.29" not in banner
+
+
+def test_the_control_url_follows_the_scheme_too():
+    banner = startup_banner(8080, ROUTE, ADDRS, control_token="7f3a9c", scheme="https")
+    assert "https://192.168.1.29:8080/control/7f3a9c" in banner

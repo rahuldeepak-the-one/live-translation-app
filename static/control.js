@@ -3,10 +3,10 @@
  * converge on the same view instead of drifting apart.
  */
 const ROTATE_S = 20;
-const NAMES = { en: "English", ml: "മലയാളം", te: "తెలుగు", hi: "हिन्दी" };
+const NAMES = { en: "English", ml: "മലയാളം", te: "తెలుగు", hi: "हिन्दी", pa: "ਪੰਜਾਬੀ" };
 
 let socket = null;
-let wall = { lanes: ["en", "ml", "te", "hi"], focus: null, rotate: 0 };
+let wall = { lanes: ["en", "ml", "te", "hi", "pa"], focus: null, rotate: 0 };
 
 const els = {
   lanes: document.getElementById("lanes"),
@@ -16,7 +16,11 @@ const els = {
   mirror: document.getElementById("mirror"),
   dot: document.getElementById("status-dot"),
   statusText: document.getElementById("status-text"),
+  clearWall: document.getElementById("clear-wall"),
+  clearHint: document.getElementById("clear-hint"),
 };
+
+const HINT = els.clearHint.textContent;
 
 // The canonical language order comes from the buttons already in the page —
 // not a second hard-coded array — so there is exactly one source of truth
@@ -24,6 +28,8 @@ const els = {
 // sits rather than at the end.
 const LANE_ORDER = [...els.lanes.querySelectorAll("button")].map((b) => b.dataset.lang);
 
+/* Defaults to a display state because that is all this page sent for most of
+   its life. `type` in the payload wins, so { type: "wall", ... } passes through. */
 function send(next) {
   if (socket && socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "display", ...next }));
@@ -76,6 +82,38 @@ els.focus.addEventListener("click", (ev) => {
 
 els.rotateOn.addEventListener("click", () => send({ ...wall, focus: null, rotate: ROTATE_S }));
 els.rotateOff.addEventListener("click", () => send({ ...wall, rotate: 0 }));
+
+/* Clearing the backlog takes two taps.
+ *
+ * Every other control here is instantly reversible — turn a lane back on and
+ * it comes back. This one is not: the scrollback is gone from every phone in
+ * the building, mid-sermon, and nobody can scroll back to the verse they were
+ * re-reading. A phone in a pocket registers stray taps, so it asks twice. */
+const CONFIRM_MS = 4000;
+let armedUntil = 0;
+
+els.clearWall.addEventListener("click", () => {
+  if (Date.now() < armedUntil) {
+    armedUntil = 0;
+    disarm();
+    send({ type: "wall", action: "clear" });
+    els.clearHint.textContent = "Cleared.";
+    setTimeout(() => { els.clearHint.textContent = HINT; }, 3000);
+    return;
+  }
+  armedUntil = Date.now() + CONFIRM_MS;
+  els.clearWall.classList.add("armed");
+  els.clearWall.textContent = "Tap again to clear";
+  els.clearHint.textContent = "This removes the captions from every screen.";
+  setTimeout(disarm, CONFIRM_MS);
+});
+
+function disarm() {
+  if (Date.now() < armedUntil) return;      // a later tap re-armed it
+  els.clearWall.classList.remove("armed");
+  els.clearWall.textContent = "Clear the wall";
+  if (els.clearHint.textContent !== "Cleared.") els.clearHint.textContent = HINT;
+}
 
 /* This page is served at /control/<token>, so it already holds the one secret
    it needs — no need to embed it separately, which would risk it reaching a

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Live Translation — Control Room</title>
+  <link rel="stylesheet" href="/static/common.css">
+  <style>
+    /* Palette, font and --ease come from common.css, which mirrors the
+       projector wall's dark tokens name for name. Only the two action fills
+       below are local — the wall has no buttons to colour. */
+    :root {
+      --go: #15803d;
+      --halt: #b91c1c;
+    }
+
+    /* common.css bottom-pins <main> so captions grow upward. A console reads
+       top-down; without this the whole console floats at the bottom of the
+       viewport until it is tall enough to fill it. */
+    main::before { margin-top: 0; }
+    main { padding: 1.4rem 0.9rem calc(2.5rem + env(safe-area-inset-bottom)); gap: 0.85rem; }
+
+    header .tag {
+      font-size: 0.62rem; font-weight: 600; letter-spacing: 0.2em;
+      text-transform: uppercase; color: var(--text-secondary);
+    }
+
+    /* Two columns once there is room — an operator on a laptop should not
+       scroll a phone column. Below 720px everything is one full-width stack. */
+    #grid { display: grid; grid-template-columns: 1fr; gap: 0.85rem; }
+    @media (min-width: 720px) {
+      #grid { grid-template-columns: 1fr 1fr; align-items: start; }
+      .span-2 { grid-column: span 2; }
+    }
+
+    /* Outer shell / inner core — panels read as instruments set into a desk. */
+    .panel { padding: 0.4rem; border-radius: 1.6rem;
+             background: var(--shell); border: 1px solid var(--hairline); }
+    .panel > .core {
+      padding: 1.1rem 1.15rem; border-radius: calc(1.6rem - 0.4rem);
+      background: var(--card-bg); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    }
+
+    .eyebrow {
+      display: inline-block; border-radius: 999px; padding: 0.26rem 0.68rem;
+      margin-bottom: 0.9rem;
+      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--hairline);
+      font-size: 0.58rem; font-weight: 600;
+      letter-spacing: 0.22em; text-transform: uppercase; color: var(--text-secondary);
+    }
+
+    .headline { font-size: 1.12rem; line-height: 1.4; overflow-wrap: break-word; }
+    .headline.muted { color: var(--text-secondary); }
+    .sub { margin-top: 0.4rem; color: var(--text-secondary); font-size: 0.84rem; line-height: 1.55; }
+
+    /* key/value rows — the "all the details" half of the page */
+    dl { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 0.9rem;
+         font-size: 0.86rem; align-items: baseline; }
+    dt { color: var(--text-secondary); white-space: nowrap; }
+    dd { text-align: right; overflow-wrap: anywhere; }
+    dd.num { font-variant-numeric: tabular-nums; }
+
+    /* ---------------------------------------------------------- level meter */
+    #meter-wrap { position: relative; margin: 1rem 0 0.5rem;
+                  height: 0.7rem; border-radius: 999px;
+                  background: rgba(255, 255, 255, 0.06);
+                  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5); overflow: hidden; }
+    #meter {
+      position: absolute; inset: 0; transform-origin: left center;
+      transform: scaleX(0); border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--live-dot));
+      transition: transform 120ms linear;   /* a meter must not lag the sound */
+    }
+    #meter.quiet { background: linear-gradient(90deg, var(--card-border), var(--text-muted)); }
+    /* Where the server stops calling it silence (SILENCE_THRESHOLD, int16). */
+    #threshold { position: absolute; top: -0.2rem; bottom: -0.2rem; width: 2px;
+                 background: rgba(255, 255, 255, 0.5); }
+    .meter-scale { display: flex; justify-content: space-between;
+                   font-size: 0.62rem; color: var(--text-secondary);
+                   font-variant-numeric: tabular-nums; }
+
+    /* ------------------------------------------------------------- controls */
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;
+               margin-top: 1rem; }
+    button {
+      font: inherit; font-size: 0.9rem; cursor: pointer; color: var(--text-confirmed);
+      padding: 0.85rem 0.6rem; border-radius: 0.9rem;
+      background: rgba(255, 255, 255, 0.045); border: 1px solid var(--hairline);
+      transition: transform 240ms var(--ease), background-color 260ms var(--ease),
+                  border-color 260ms var(--ease), opacity 200ms var(--ease);
+    }
+    button:active:not(:disabled) { transform: scale(0.97); }
+    button:disabled { opacity: 0.3; cursor: default; }
+    button:focus-visible { outline: 2px solid var(--accent-edge); outline-offset: 3px; }
+    #btn-start.armed { background: var(--go); border-color: var(--live-dot); }
+    #btn-stop.armed { background: var(--halt); border-color: var(--down-dot); }
+
+    /* --------------------------------------------------------- device list */
+    #devices { list-style: none; display: flex; flex-direction: column; gap: 0.45rem; }
+    .device {
+      display: flex; align-items: center; gap: 0.8rem; width: 100%; text-align: left;
+      padding: 0.8rem 0.9rem; border-radius: 1rem;
+    }
+    .device .pip {
+      flex: 0 0 auto; width: 0.6rem; height: 0.6rem; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.18);
+      transition: background-color 300ms var(--ease), box-shadow 300ms var(--ease);
+    }
+    .device.current { background: var(--accent); border-color: var(--accent-edge); }
+    .device.current .pip { background: #fff; box-shadow: 0 0 0 0.22rem rgba(255, 255, 255, 0.25); }
+    .device .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .device .role { font-size: 0.62rem; letter-spacing: 0.14em; text-transform: uppercase;
+                    color: var(--text-secondary); }
+    .device.current .role { color: rgba(255, 255, 255, 0.75); }
+    #devices-empty { color: var(--text-secondary); font-size: 0.86rem; line-height: 1.55; }
+    #devices-empty[hidden] { display: none; }
+
+    /* ---------------------------------------------------------- state chips */
+    .chip {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      padding: 0.3rem 0.7rem; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--hairline);
+      font-size: 0.74rem;
+    }
+    .chip .pip { width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--text-secondary); }
+    .chip.on .pip { background: var(--live-dot); }
+    .chip.warn .pip { background: var(--warn-dot); }
+    .chip.off .pip { background: var(--down-dot); }
+    #chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+    #urls { list-style: none; font-size: 0.82rem; color: var(--text-secondary); line-height: 1.7;
+            overflow-wrap: anywhere; }
+
+    @media (prefers-reduced-motion: reduce) {
+      button, .device .pip, #meter { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span><span id="status-dot"></span><span id="status-text">connecting…</span></span>
+    <span class="tag">Control room</span>
+  </header>
+  <main>
+    <div id="grid">
+
+      <section class="panel span-2">
+        <div class="core">
+          <span class="eyebrow">Microphone</span>
+          <p class="headline muted" id="mic-device">No capture feed connected</p>
+          <p class="sub" id="mic-sub">Run ./feed-mic.py on the machine with the mixer.</p>
+
+          <div id="meter-wrap"><div id="meter"></div><div id="threshold"></div></div>
+          <div class="meter-scale">
+            <span>−60 dB</span><span id="meter-read">silent</span><span>0 dB</span>
+          </div>
+
+          <div class="actions">
+            <button type="button" id="btn-start">▶ Start listening</button>
+            <button type="button" id="btn-stop">⏹ Stop listening</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="core">
+          <span class="eyebrow">Inputs available</span>
+          <ul id="devices"></ul>
+          <p id="devices-empty">Nothing listed yet. ./feed-mic.py names the inputs it
+             can see as soon as it connects.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="core">
+          <span class="eyebrow">Now</span>
+          <div id="chips"></div>
+          <dl style="margin-top: 1rem;">
+            <dt>Pipeline</dt><dd id="d-pipeline">—</dd>
+            <dt>Screens</dt><dd class="num" id="d-screens">0</dd>
+            <dt>On the wall</dt><dd id="d-wall">—</dd>
+          </dl>
+        </div>
+      </section>
+
+      <section class="panel span-2">
+        <div class="core">
+          <span class="eyebrow">Server</span>
+          <dl>
+            <dt>Speech</dt><dd id="d-whisper">—</dd>
+            <dt>Translation</dt><dd id="d-translator">—</dd>
+            <dt>Languages</dt><dd id="d-langs">—</dd>
+            <dt>Sample rate</dt><dd class="num" id="d-rate">—</dd>
+            <dt>Silence cut</dt><dd class="num" id="d-silence">—</dd>
+            <dt>Max buffer</dt><dd class="num" id="d-buffer">—</dd>
+            <dt>Backlog kept</dt><dd class="num" id="d-history">—</dd>
+            <dt>Uptime</dt><dd class="num" id="d-uptime">—</dd>
+          </dl>
+          <p class="sub" style="margin-top: 1rem;">Congregation opens:</p>
+          <ul id="urls"></ul>
+        </div>
+      </section>
+
+    </div>
+  </main>
+  <script type="module" src="/static/status.js"></script>
+</body>
+</html>

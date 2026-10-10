@@ -1,0 +1,393 @@
+LIVE TRANSLATION PIPELINE: AUDIT OF WHAT IS ACTUALLY RUNNING
+Date: 2026-10-06    Base commit: c795d6c (plus the uncommitted feed-mic.py work)
+Sources read in full: config.py, audio_buffer.py, stt.py, pipeline.py, translator.py,
+server.py, feed-mic.py, hub.py, audio_tee.py, transcript_log.py, segmentation_log.py,
+display_state.py, plus start.sh, README.md and static/view.js (spot-checked).
+Line numbers refer to the working tree as of this date.
+
+==========================================================================================
+1. PIPELINE FLOW
+==========================================================================================
+
+  [Yamaha MG-XU USB mixer]
+          |
+          v
+  feed-mic.py  (a separate process; this is the ONLY input)
+    pick_source()            feed-mic.py:81    pactl JSON; skips .monitor; prefers non-PCI
+    Capture.open()           feed-mic.py:131   parec --rate=16000 --channels=2 s16le
+    Capture.read()           feed-mic.py:175   100 ms chunks; L/R/mix chosen once (_decide :153)
+    optional --gain          feed-mic.py:196
+    pump().feed()            feed-mic.py:300   sends {"type":"config","sampleRate":16000}, then raw PCM
+          |  WebSocket  ws(s)://127.0.0.1:8080/ws/mic   (binary int16 mono)
+          v
+  server.py ws_mic()         server.py:141
+    AudioTee.received()      server.py:172     OPTIONAL (env AUDIO_TEE): session.wav
+    AudioBuffer.add_chunk()  server.py:173
+    AudioBuffer.cut_reason() server.py:174 -> audio_buffer.py:75   LOUDNESS GATE + segmenter
+       |-- None  -> flush_if_stale(has_speech)        server.py:227 -> pipeline.py:287
+       '-- "silence" | "max_buffer"
+            get_audio_and_clear()                     server.py:192
+            AudioTee.chunk()  (optional)              server.py:193
+            SegmentationLog.record_cut()              server.py:195
+            UtterancePipeline.process(audio)          server.py:201 -> pipeline.py:134
+                 |
+                 v
+  STT   WhisperSTT.transcribe()  stt.py:115 -> _transcribe_sync stt.py:120
+          faster-whisper .transcribe(language="en", vad_filter=False, ...)
+          strip_hallucinations() -> keep_segment()    stt.py:88 / stt.py:56
+                 |
+                 v
+  SENTENCE ASSEMBLY   pipeline.py:137-271
+          debris check (no \w -> drop)                pipeline.py:137
+          stale-hold flush                            pipeline.py:154
+          Stage 2b: held full stop confirmed/rejected by next chunk's first letter
+                                                      pipeline.py:169
+          split_source_sentences()                    translator.py:61
+          hub.publish_sentence(id, en, final)         pipeline.py:247   <- ENGLISH SHOWN HERE
+          the last sentence is HELD; complete ones go to MT
+                 |
+                 v
+  MT    _flush_many() -> translator.translate_sentences()   pipeline.py:320 / translator.py:206
+          clean_for_translation()                     pipeline.py:99
+          apply_source_rewrites()                     translator.py:49
+          split_long_sentence() (>200 chars)          translator.py:93
+          IndicTrans2 batched generate (sentences x 3 langs) translator.py:237
+          normalize_malayalam() + apply_glossary()    translator.py:33 / :118
+                 |
+                 v
+  OUTPUT
+    hub.publish_translation()  hub.py:126  -> every /ws/captions socket
+    TranscriptLog.write()      transcript_log.py:26 -> transcripts/<date>.jsonl
+    log line "#id stt=..s mt=..s"                     pipeline.py:344
+    screens: /display (projector), /view (phone: Live | Recap), /control, /status
+
+  Hold-and-flush path (runs on chunks that are not cut):
+    flush_if_stale()   pipeline.py:287   waits for SENTENCE_GRACE_S (held text ends in a full stop)
+                                         or MAX_SENTENCE_HOLD_S (it doesn't), measured as
+                                         silence, then calls _flush() pipeline.py:346
+                                         (translate_all, one sentence)
+
+==========================================================================================
+2. AUDIO INGEST
+==========================================================================================
+
+  Capture tool        parec (PulseAudio/PipeWire), started as a child of feed-mic.py
+  Device choice       name/description substring argument; otherwise the first non-PCI
+                      source; the operator can switch from /status/<token> (set_device)
+  Format on capture   16 kHz, s16le, 2 channels. PulseAudio does the resampling (the
+                      mixer's native rate is converted by parec, not by our code)
+  Channel decision    the first ~1 s of audio (RATE samples) decides L, R or mix; one side
+                      must be 3x louder to win, otherwise L+R are averaged. Re-checked on
+                      every open()
+  Chunk size          CHUNK_MS = 100 -> 1600 mono samples = 3200 bytes per WebSocket frame
+  Gain                software multiply with clipping (default 1.0)
+  DSP                 none (no AGC, no noise suppression, no high-pass filter)
+  Server side         AudioBuffer: one growing bytearray, int16. No resampling on the
+                      server. buf.sample_rate is TAKEN FROM THE CLIENT's config message
+                      (server.py:159); see the gaps section
+  Windowing           RMS over 0.1 s windows (SPEECH_WINDOW_S) for has_speech() and
+                      trailing_silence_seconds(); has_trailing_silence() takes ONE RMS over
+                      the last 0.6 s
+  To Whisper          int16 -> float32 / 32768 (stt.py:121). The whole chunk goes in one call
+
+==========================================================================================
+3. SPEECH DETECTION / GATING (what is active right now)
+==========================================================================================
+
+  ACTIVE:   RMS loudness gate inside AudioBuffer (audio_buffer.py:31-99)
+  INACTIVE: Silero VAD (faster-whisper vad_filter) - WHISPER_VAD_FILTER = False
+            (config.py:76, used at stt.py:126). Off since 2026-09-20: it deleted
+            speech the loudness gate had already passed ("be my" instead of
+            "the cross be my glory ever to").
+  No webrtcvad, no Silero outside Whisper, no spectral or ML gate anywhere.
+
+  When a chunk is cut (cut_reason, audio_buffer.py:75), checked in this order:
+    1. duration < MIN_SPEECH_S (0.5 s)            -> no cut
+    2. no 0.1 s window >= SILENCE_THRESHOLD (120) -> no cut (and the buffer is NOT cleared)
+    3. duration >= MAX_BUFFER_S (8.0 s)           -> cut "max_buffer"
+    4. duration >= MIN_TRIGGER_S (1.5 s) AND the last 0.6 s RMS < 120 -> cut "silence"
+
+  Measured 2026-09-20 (transcripts/2026-09-20.jsonl): 571 silence cuts and 33 max_buffer
+  cuts over the service (~49 min).
+
+  Filters after Whisper: see section 4. Debris check (no \w character) at pipeline.py:137.
+
+==========================================================================================
+4. ASR
+==========================================================================================
+
+  Library        faster-whisper (CTranslate2), NOT transformers           stt.py:107
+  Model          distil-whisper/distil-large-v3.5-ct2                     config.py:23
+                 (rollback: "distil-large-v3", still in the HF cache)
+  Device         cuda float16; falls back to cpu int8                     stt.py:108-109
+  Concurrency    asyncio.Lock + run_in_executor (one decode at a time)    stt.py:112,115
+  Language       FIXED "en" (SOURCE_LANG) on every call. No auto-detect; the model is
+                 English-only
+  VAD filter     OFF (vad_filter=False; vad_parameters None)
+  Context        condition_on_previous_text=False. Each chunk is decoded independently
+  Prompt         WHISPER_INITIAL_PROMPT (sermon + everyday register, ~870 chars) on
+                 every call
+  Hotwords       WHISPER_HOTWORDS = None. SERMON_HOTWORDS is kept but unused;
+                 _hotwords() refuses to send both (stt.py:31)
+  Beam/temp      faster-whisper defaults (beam_size=5, temperature fallback schedule).
+                 Not set in config
+  Per-segment filters (keep_segment, stt.py:56), cheapest first:
+     no_speech_prob > 0.6                -> drop    NO_SPEECH_PROB_MAX
+     avg_logprob   < -2.0                -> drop    AVG_LOGPROB_MIN
+     compression_ratio > 2.2             -> drop    COMPRESSION_RATIO_MAX
+     text normalises to nothing          -> drop
+     every word in FILLER_TOKENS | {"you"} -> drop  (whole segment only)
+     equals/starts with HALLUCINATION_PHRASES (10 YouTube-outro phrases) -> drop
+  Measured STT latency, 2026-09-20: median 1.57 s, p90 1.96 s (per translated row)
+
+==========================================================================================
+5. TRANSLATION
+==========================================================================================
+
+  Yes, MT is live.
+  Primary   ai4bharat/indictrans2-en-indic-dist-200M via transformers
+            (trust_remote_code), fp16 on cuda                          translator.py:221
+  Fallback  facebook/nllb-200-distilled-600M, used only if IndicTrans2 fails to load
+                                                                       translator.py:413
+            !! BROKEN, see the gaps section: NLLB has no translate_sentences_sync
+  Targets   ml (mal_Mlym), te (tel_Telu), hi (hin_Deva). Source en (eng_Latn)
+  Unit      a SENTENCE. Fragments are never translated: ml/te/hi are verb-final
+  Sentence assembly:
+     - English split on (?<=[.!?])\s+ ; parts with no word character are dropped
+     - the last part is held; a held full stop is accepted or rejected by the
+       capitalisation of the next chunk's first letter (Stage 2b)
+     - hold limits: SENTENCE_GRACE_S 3.0 s (held text ends in a full stop),
+       MAX_SENTENCE_HOLD_S 16.0 s (it doesn't), both measured as silence;
+       MAX_PENDING_CHARS 400 flushes regardless
+     - trailing ellipses and dangling , ; : - are stripped before MT only
+     - partial words with a trailing hyphen at chunk edges are dropped on join
+  Chunking for MT:
+     - sentences over 200 chars (CLAUSE_SPLIT_CHARS) are split at "lowercase/comma +
+       Capital" boundaries, packed back up to 200, then rejoined per sentence
+  Batching   ONE generate per chunk: (sentences x 3 languages) rows, max_length 256 in/out,
+             num_beams=5, no_repeat_ngram_size=4, repetition_penalty=1.15
+  Context    MT_USE_CONTEXT = False. The previous sentence is passed in but IGNORED.
+             If enabled: a 1-sentence prefix, plus a recovery that retries with no
+             context when the output comes back short
+  Pre/post   SOURCE_REWRITES (contrast->compare, idol->false god, "not dishonesty")
+             GLOSSARY (steward/master pinned in ml/te/hi; populated, not empty)
+             Malayalam legacy-codepoint normalisation
+  Concurrency  its own asyncio.Lock, separate from Whisper's. STT and MT share the GPU
+  Measured MT latency, 2026-09-20: median 0.99 s, p90 2.59 s
+
+==========================================================================================
+6. OUTPUT
+==========================================================================================
+
+  Display    WebSocket /ws/captions (hub.py). Message types: history, display, sentence
+             (en, final flag), translation (ml/te/hi), status, presence/mic (operators only)
+             English is published before MT finishes, then revised in place by id;
+             final=false shows grey
+  Screens    /display projector (lanes, focus, rotate), /view phone (one language,
+             Live | Recap; the recap is extractive and runs on the phone, recap.js),
+             /control/<tok>, /status/<tok>
+  Replay     the last HISTORY_SIZE=30 sentences are sent to a screen that joins late
+  TTS        NONE
+  Streaming  sentence-level push. Not token streaming; no LocalAgreement (README claims
+             it, see section 7)
+  Logging    transcripts/<date>.jsonl: one row per translated sentence
+             {ts,id,en,translations,stt_s,mt_s}, plus one "cut" row per audio cut
+             {reason,chunk_s,trailing_silence_s,looked_complete,text,audio,speech_gap_s}
+             Optional AUDIO_TEE: session.wav + chunks/<time>_<reason>.wav
+  Latency    stt_s and mt_s per row only. NOT measured: time from end of speech to
+             screen. A full delay = buffering (up to 8 s or 0.6 s of silence) + STT +
+             sentence hold (0-16 s, MT only) + MT. On a flush via flush_if_stale, stt_s
+             is logged as 0.0
+             Offline tools: analyze_segmentation.py, miclevel.py
+
+==========================================================================================
+7. CONFIG vs REALITY: stale or wrong statements
+==========================================================================================
+
+  [S1] config.py:117-120  "Fed digital silence, fan noise ... and white hiss, the model emits
+       nothing at all - Silero VAD stops it before any score is read."
+       REALITY: Silero is off. With it off, silence decodes to "you" (config.py:303-308 says
+       so). The loudness gate is now what keeps noise out of Whisper.
+
+  [S2] config.py:418-421  "DELIBERATELY EMPTY." about GLOSSARY.
+       REALITY: GLOSSARY has 9 rows across ml/te/hi (config.py:430-457). The paragraph
+       below it ("Filled in after replaying...") contradicts the one above.
+
+  [S3] config.py:401  "MT_USE_CONTEXT makes drift less likely; only this table pins a term."
+       REALITY: MT_USE_CONTEXT is False (config.py:352). It does nothing today.
+
+  [S4] config.py:57  MIN_SPEECH_S "ignore blips shorter than this"
+       REALITY: it compares against the WHOLE buffer's length, not the length of the
+       speech. A buffer below 0.5 s can't be cut anyway because MIN_TRIGGER_S=1.5 and
+       MAX_BUFFER_S=8. This constant never decides anything.
+
+  [S5] config.py:131-132  bare "Thank you." is "handled by the energy gate and
+       NO_SPEECH_PROB_MAX instead".
+       REALITY: config.py:120-121 records it passing straight through both (39 times on
+       2026-08-23). Nothing currently stops a hallucinated "Thank you."
+
+  [S6] stt.py:1 docstring "distil-large-v3"; stt.py:125 comment "distil-large-v3 is
+       English-only"; config.py:103 "distil-large-v3 emits..."
+       REALITY: the model is distil-large-v3.5 (config.py:23). Harmless but stale.
+
+  [S7] pipeline.py:315  log "flushed unfinished after %.1fs" always prints
+       MAX_SENTENCE_HOLD_S (16.0)
+       REALITY: a held sentence ending in a full stop is flushed after SENTENCE_GRACE_S
+       (3.0). The log line misreports it.
+
+  [S8] start.sh:15 banner "Whisper + NLLB on Local GPU"
+       REALITY: IndicTrans2 is primary; NLLB is a fallback (and broken, G1).
+
+  [S9] README.md:11,21-22  "Whisper (distil-large-v3)", "phone mic", "re-transcribes the
+       last ~10 seconds every ~0.7s ... LocalAgreement", "/admin"
+       REALITY: v3.5; feed-mic.py is the only input (no phone/browser mic); chunked
+       transcription with no LocalAgreement; the operator pages are /control/<tok> and
+       /status/<tok>.
+
+  [S10] translator.py:3  "Both expose: async translate_all(text)"
+       REALITY: the pipeline mainly calls translate_sentences(), which only IndicTrans2
+       implements (G1).
+
+  [S11] server.py:259,271 and hub.py:15,21,176 still say "capture page"
+       REALITY: the capture page was deleted; the client is feed-mic.py.
+
+  [S12] server.py:3-11 route list leaves out /control/<tok>, /qr.svg and /api/status.
+
+  [S13] Memory note "accent-is-not-hallucination": "VAD, not confidence, is what guards
+       noise"
+       REALITY: true only while Silero was on. Today the RMS gate plus the "you" filter
+       guard noise.
+
+  [S14] Memory note "laptop-mic-fan-noise" / "GA503RM mic fix": gain numbers for the
+       internal mic. Already marked as not applying (usb-mixer-capture). Fine as history.
+
+==========================================================================================
+8. KNOWN GAPS (from the code)
+==========================================================================================
+
+  Correctness / reliability
+  [G1] THE NLLB FALLBACK CRASHES ON THE MAIN PATH. NLLBTranslator defines only
+       translate_all_sync. _AsyncTranslatorBase.translate_sentences calls
+       self.translate_sentences_sync (translator.py:218), which doesn't exist on NLLB,
+       so every _flush_many raises AttributeError. server.py:202 catches it and the
+       utterance is DROPPED. If IndicTrans2 ever fails to load, the English still shows
+       but nearly all translations are lost.
+
+  [G2] A silent buffer is never cleared. When no window reaches SILENCE_THRESHOLD,
+       cut_reason() returns None and the bytes keep piling up (audio_buffer.py:89;
+       config.py:245-247 admits this). Effects:
+         - after a long quiet stretch (worship music below 120, a prayer, an
+           announcement break) the first loud window triggers an immediate
+           "max_buffer" cut holding MINUTES of audio. Whisper decodes it in 30 s
+           windows, which means a latency spike and "you" artifacts on the silent parts
+         - _window_rms() reruns over the WHOLE buffer every 100 ms, so CPU cost grows
+           with the length of the silence (quadratic over the stretch)
+       Fix shape: trim leading silence, or cap the buffer at MAX_BUFFER_S of silence.
+
+  [G3] The server trusts the client's sample rate. buf.sample_rate = msg["sampleRate"]
+       (server.py:159) changes the buffer's timing maths, but nothing resamples, and
+       Whisper always assumes 16 kHz. /ws/mic has no token (hub.py:23), so anything
+       on the church WiFi can open it and inject audio or a bad rate.
+
+  [G4] Cuts are blocked while a chunk is processed. ws_mic awaits process() (STT, then
+       MT for any finished sentences) inside the receive loop (server.py:201), so no
+       new audio is read or cut until both finish. Audio queues in the socket rather
+       than being lost, but every MT batch adds to the delay of the NEXT chunk.
+
+  [G5] There is no end-to-end latency figure: no timestamp for when speech ended or
+       when the screen received it.
+
+  Noise robustness
+  [G6] The only speech detector is a fixed RMS threshold, tuned to one room and one
+       board gain. A fan, HVAC, crowd noise or music above 120 is "speech", so cuts
+       stop being triggered by silence and fall back to 8 s max_buffer cuts, which land
+       mid-word. A trained VAD (Silero standalone, used only for cut decisions, not
+       inside Whisper) would separate noise from speech without the deletion problem.
+  [G7] The threshold doesn't adapt (no noise-floor tracking), and the silence test uses
+       one RMS over 0.6 s, so a single cough or clap resets it.
+
+  Long-form / sermon handling
+  [G8] Whisper keeps no context between chunks (condition_on_previous_text=False and the
+       prompt is static), so names and terms can change from chunk to chunk.
+  [G9] No terminology memory in MT beyond the static GLOSSARY (MT_USE_CONTEXT off), so
+       a character's name can still change between sentences in one sermon.
+  [G10] The unpunctuated run-on backstop is 400 chars, then the 200-char clause split.
+       A preacher who rarely pauses still produces 8 s chunks cut mid-word.
+  [G11] There is no scripture-verse detection or lookup. The config names reference
+       Bibles (KJV / BSI OV) "for (later) verse lookup", but none exists, so quoted
+       verses are machine-translated rather than shown from the agreed Bible.
+
+  Language coverage
+  [G12] Source is English only (the model is English-only, language is fixed). Speech
+       in Malayalam, Telugu, Hindi or Tamil, or switching mid-sentence, is forced into
+       English or dropped. Many Indian congregations switch languages mid-sermon.
+  [G13] Targets are fixed at ml/te/hi in config. Adding Tamil/Kannada needs a config
+       change and a restart; IndicTrans2 supports them.
+
+  Accessibility / output
+  [G14] No TTS / audio channel for listeners who can't read the screen or are visually
+       impaired.
+  [G15] Recap is extractive only; no abstractive summary (known, see the memory note
+       next-version-summarisation).
+
+  Operations
+  [G16] One microphone, one buffer, app-wide state (server.py:111-129). A second
+       feed-mic.py silently replaces the first.
+  [G17] Recording the audio (AUDIO_TEE) is opt-in, so a bad service usually has no audio
+       to replay unless someone turned it on beforehand.
+
+==========================================================================================
+CONFIG TABLE (diff this section against a future run)
+==========================================================================================
+
+  KEY                     VALUE                                        WHERE
+  ----------------------  -------------------------------------------  -----------------------
+  WHISPER_MODEL           distil-whisper/distil-large-v3.5-ct2         config.py:23
+  STT runtime             faster-whisper, cuda fp16 / cpu int8         stt.py:107-109
+  TRANSLATOR_BACKEND      indictrans2                                  config.py:24
+  INDICTRANS2_MODEL       ai4bharat/indictrans2-en-indic-dist-200M     config.py:25
+  NLLB_MODEL              facebook/nllb-200-distilled-600M (fallback)  config.py:26
+  SOURCE_LANG             en (fixed, no auto-detect)                   config.py:29
+  TARGET_LANGS            ml, te, hi                                   config.py:30
+  SAMPLE_RATE             16000                                        config.py:39
+  feed-mic RATE/CHUNK_MS  16000 / 100 ms, stereo capture -> mono       feed-mic.py:49-50
+  feed-mic channel        auto (1 s probe, 3x ratio) | l | r | mix     feed-mic.py:153
+  feed-mic gain           1.0                                          feed-mic.py:351
+  SILENCE_THRESHOLD       120 RMS                                      config.py:54
+  SILENCE_DURATION_S      0.6                                          config.py:55
+  MAX_BUFFER_S            8.0                                          config.py:56
+  MIN_SPEECH_S            0.5 (never decides anything, S4)             config.py:57
+  MIN_TRIGGER_S           1.5                                          config.py:58
+  SPEECH_WINDOW_S         0.1                                          config.py:59
+  WHISPER_VAD_FILTER      False (Silero off)                           config.py:76
+  condition_on_prev_text  False                                        stt.py:133
+  WHISPER_INITIAL_PROMPT  set (sermon + everyday register)             config.py:157
+  WHISPER_HOTWORDS        None (SERMON_HOTWORDS defined, unused)       config.py:229
+  NO_SPEECH_PROB_MAX      0.6                                          config.py:106
+  AVG_LOGPROB_MIN         -2.0                                         config.py:127
+  COMPRESSION_RATIO_MAX   2.2                                          config.py:128
+  HALLUCINATION_PHRASES   10 phrases (prefix match)                    config.py:133
+  FILLER_TOKENS           25 tokens (whole-segment match)              config.py:298
+  SILENCE_ARTIFACTS       {"you"} (whole-segment match)                config.py:322
+  SENTENCE_END_CHARS      .?!                                          config.py:244
+  MAX_SENTENCE_HOLD_S     16.0                                         config.py:255
+  MAX_PENDING_CHARS       400                                          config.py:260
+  SENTENCE_GRACE_S        3.0                                          config.py:290
+  CLAUSE_SPLIT_CHARS      200                                          translator.py:82
+  MT max_length           256 (input and output)                       translator.py:267,272
+  MT_NUM_BEAMS            5                                            config.py:465
+  MT_NO_REPEAT_NGRAM      4                                            config.py:471
+  MT_REPETITION_PENALTY   1.15                                         config.py:472
+  MT_USE_CONTEXT          False                                        config.py:352
+  SOURCE_REWRITES         5 rows                                       config.py:367
+  GLOSSARY                ml 3, te 3, hi 3 rows                        config.py:430
+  HISTORY_SIZE            30 sentences                                 config.py:85
+  HOST:PORT               0.0.0.0:8080                                 config.py:88-89
+  TLS                     optional; certs/server.{crt,key}             config.py:99-100
+  AUDIO_TEE               off unless env AUDIO_TEE set                 server.py:119
+  TRANSCRIPT_DIR          transcripts/                                 config.py:460
+  DEFAULT_LANES           en, ml, te, hi                               config.py:477
+  ROTATE_MIN/MAX_S        5 / 120                                      config.py:480-481
+  TTS                     none                                         -
+  Measured (2026-09-20)   STT med 1.57 s p90 1.96 s; MT med 0.99 s     transcripts/2026-09-20.jsonl
+                          p90 2.59 s; cuts: 571 silence / 33 max_buffer

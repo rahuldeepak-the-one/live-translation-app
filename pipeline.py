@@ -1,4 +1,4 @@
-"""One utterance through the system: audio -> English -> 3 translations -> screens.
+"""One utterance through the system: audio -> English -> 4 translations -> screens.
 
 English is published as soon as Whisper produces it, so the screens stay live.
 Translation is deferred until the sentence is actually complete — see
@@ -9,7 +9,7 @@ import re
 import time
 
 from config import (SENTENCE_END_CHARS, MAX_SENTENCE_HOLD_S, MAX_PENDING_CHARS,
-                    SENTENCE_GRACE_S)
+                    SENTENCE_GRACE_S, SOURCE_LANG, TARGET_LANGS)
 from translator import split_source_sentences
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ class UtterancePipeline:
 
     async def process(self, audio_np):
         t0 = self._clock()
-        text = await self.stt.transcribe(audio_np)
+        text, lang = await self.stt.transcribe(audio_np)
         if not text or not re.search(r"\w", text):   # "." alone is debris
             return None
         t_stt = self._clock() - t0
@@ -146,6 +146,9 @@ class UtterancePipeline:
                 # transcript log follows. A dropped measurement is a nuisance;
                 # a dropped sentence is a congregation reading nothing.
                 logger.exception("on_chunk_text failed — continuing without it")
+
+        if lang != SOURCE_LANG:
+            return await self._publish_as_said(text, lang, t_stt)
 
         # Speech arriving after the hold expired belongs to a new sentence, not
         # the held one: that much silence means the speaker moved on, and
@@ -312,10 +315,36 @@ class UtterancePipeline:
             return None
         sid, joined = self._pending["id"], self._pending["text"]
         self._pending = None
-        logger.info("#%d flushed unfinished after %.1fs", sid, MAX_SENTENCE_HOLD_S)
+        logger.info("#%d flushed unfinished after %.1fs", sid, self._hold_limit())
         result = await self._flush(sid, joined, 0.0)
         self._context = ""      # the speaker stopped; the next line is new
         return result[0]
+
+    async def _publish_as_said(self, text, lang, t_stt):
+        """A chunk in another language: shown as said, in every lane.
+
+        The translator is en->indic only, so there is nothing to translate it
+        with; and none of Stage 2b's sentence assembly applies, since it reads
+        English capitalisation and punctuation. A held English sentence is
+        flushed first so the two never weld.
+        """
+        if self._pending is not None:
+            await self._flush(self._pending["id"], self._pending["text"], 0.0)
+        self._context = ""
+        self._counter += 1
+        sid = self._counter
+        await self.hub.publish_sentence(sid, text, final=True)
+        # Every lane gets the words as said. An empty string would read as a
+        # translation failure (card.js classify) and park "Waiting for
+        # translation…" on the other cards for good.
+        translations = {t: text for t in TARGET_LANGS}
+        await self.hub.publish_translation(sid, translations)
+        if self.transcript is not None:
+            self.transcript.write(id=sid, en=text, lang=lang,
+                                  translations=translations,
+                                  stt_s=round(t_stt, 3), mt_s=0.0)
+        logger.info("#%d stt=%.2fs lang=%s (as said): %s", sid, t_stt, lang, text)
+        return sid, text
 
     async def _flush_many(self, numbered, t_stt):
         """Translate and publish several complete sentences in ONE call.
@@ -338,7 +367,7 @@ class UtterancePipeline:
             await self.hub.publish_translation(sid, translations)
             if self.transcript is not None:
                 self.transcript.write(
-                    id=sid, en=raw, translations=translations,
+                    id=sid, en=raw, lang=SOURCE_LANG, translations=translations,
                     stt_s=round(t_stt, 3), mt_s=round(t_mt, 3),
                 )
             logger.info("#%d stt=%.2fs mt=%.2fs: %s", sid, t_stt, t_mt, raw)
@@ -361,7 +390,7 @@ class UtterancePipeline:
 
         if self.transcript is not None:
             self.transcript.write(
-                id=sid, en=joined, translations=translations,
+                id=sid, en=joined, lang=SOURCE_LANG, translations=translations,
                 stt_s=round(t_stt, 3), mt_s=round(t_mt, 3),
             )
         logger.info("#%d stt=%.2fs mt=%.2fs: %s", sid, t_stt, t_mt, joined)

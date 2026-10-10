@@ -73,7 +73,7 @@ def test_mic_audio_reaches_caption_screens(monkeypatch):
 
 def test_pages_served():
     client = make_client()
-    for path in ("/mic", "/display", "/view"):
+    for path in ("/display", "/view"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert "<html" in r.text.lower()
@@ -248,7 +248,7 @@ def test_socket_without_the_token_cannot_change_the_wall():
     # QR-coded for the whole congregation — so an unauthenticated socket must
     # not be able to reconfigure the projector from a developer console.
     client = make_client()
-    assert _wall_lanes(client) == ["en", "ml", "te", "hi"]
+    assert _wall_lanes(client) == ["en", "ml", "te", "hi", "pa"]
 
 
 def test_socket_with_the_token_can_change_the_wall():
@@ -259,14 +259,14 @@ def test_socket_with_the_token_can_change_the_wall():
 
 def test_socket_with_a_wrong_token_cannot_change_the_wall():
     client = make_client()
-    assert _wall_lanes(client, "?t=definitely-not-the-token") == ["en", "ml", "te", "hi"]
+    assert _wall_lanes(client, "?t=definitely-not-the-token") == ["en", "ml", "te", "hi", "pa"]
 
 
 def test_socket_with_a_non_ascii_token_is_rejected_not_crashed():
     # Same TypeError trap as the /control route: compare_digest refuses a
     # non-ASCII str, and an exception here would tear down the caption feed.
     client = make_client()
-    assert _wall_lanes(client, "?t=caf%C3%A9") == ["en", "ml", "te", "hi"]
+    assert _wall_lanes(client, "?t=caf%C3%A9") == ["en", "ml", "te", "hi", "pa"]
 
 
 def test_unauthenticated_socket_still_receives_captions():
@@ -409,3 +409,226 @@ def test_mic_loop_tells_the_pipeline_whether_the_chunk_had_speech():
         mic.send_bytes(loud(0.2))     # audible, still too short to cut
 
     assert spy.speech_flags == [False, True], spy.speech_flags
+
+
+# ---------------------------------------------------------------- control room
+# /status can stop the microphone mid-sermon, so it is gated exactly like
+# /control. The capture DEVICE lives in the mic page's getUserMedia call, so
+# the server never changes it — it only relays the request.
+
+def read_until(socket, wanted, where=None, cap=12):
+    """Next message of a type, optionally matching a predicate.
+
+    `where` matters more than it looks: registering sends a RETAINED snapshot
+    of both the wall and the mic, so the first `display`/`mic` a socket sees is
+    the state as it already was, not the change under test.
+    """
+    for _ in range(cap):
+        msg = socket.receive_json()
+        if msg.get("type") == wanted and (where is None or where(msg)):
+            return msg
+    raise AssertionError(f"no matching {wanted!r} message within {cap} frames")
+
+
+def test_status_page_served_for_the_generated_token():
+    client = make_client()
+    token = server_module.control_token()
+    assert client.get(f"/status/{token}").status_code == 200
+
+
+def test_wrong_status_token_is_indistinguishable_from_a_missing_page():
+    client = make_client()
+    real = client.get("/status/definitely-not-the-token")
+    absent = client.get("/status/")
+    assert real.status_code == 404
+    assert real.status_code == absent.status_code
+
+
+def test_status_api_needs_the_token():
+    client = make_client()
+    assert client.get("/api/status").status_code == 404
+    assert client.get("/api/status?t=wrong").status_code == 404
+    ok = client.get(f"/api/status?t={server_module.control_token()}")
+    assert ok.status_code == 200
+    assert ok.json()["sampleRate"] == SAMPLE_RATE
+
+
+def test_status_token_is_not_guessable_from_the_public_pages():
+    client = make_client()
+    token = server_module.control_token()
+    for path in ("/view", "/display", "/qr.svg"):
+        assert token not in client.get(path).text
+
+
+def test_capture_state_reaches_an_operator_but_not_a_plain_screen():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+        with client.websocket_connect("/ws/captions") as screen:
+            assert screen.receive_json()["type"] == "history"
+            assert screen.receive_json()["type"] == "display"
+            with client.websocket_connect("/ws/mic") as mic:
+                mic.send_json({
+                    "type": "mic_state", "capturing": True, "deviceId": "usb-1",
+                    "deviceLabel": "Yamaha MG10XU", "level": 0.4,
+                    "devices": [{"id": "usb-1", "label": "Yamaha MG10XU"}],
+                })
+                state = read_until(operator, "mic", lambda m: m["connected"])
+                assert state["deviceLabel"] == "Yamaha MG10XU"
+                assert state["capturing"] is True
+
+                # Now make something the screen IS entitled to. If the mic
+                # state had leaked to it, that frame would be queued ahead of
+                # this one — so the type of the very next message is the proof.
+                operator.send_json(
+                    {"type": "display", "lanes": ["ml"], "focus": None, "rotate": 0})
+                assert screen.receive_json()["type"] == "display"
+
+
+def test_operator_stop_reaches_the_capture_page():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect("/ws/mic") as mic:
+        assert mic.receive_json()["type"] == "status"      # "ready"
+        with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+            operator.send_json({"type": "mic", "action": "stop"})
+            assert mic.receive_json() == {"type": "command", "action": "stop"}
+
+
+def test_operator_can_name_the_input_to_switch_to():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()
+        with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+            operator.send_json({"type": "mic", "action": "set_device", "deviceId": "usb-1"})
+            assert mic.receive_json() == {
+                "type": "command", "action": "set_device", "deviceId": "usb-1"}
+
+
+def test_a_screen_without_the_token_cannot_stop_the_microphone():
+    client = make_client()
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()
+        with client.websocket_connect("/ws/captions") as screen:
+            screen.send_json({"type": "mic", "action": "stop"})
+            # Prove nothing arrived by sending something that DOES: if the stop
+            # had been relayed it would be sitting ahead of this in the queue.
+            with client.websocket_connect(
+                    f"/ws/captions?t={server_module.control_token()}") as operator:
+                operator.send_json({"type": "mic", "action": "start"})
+                assert mic.receive_json() == {"type": "command", "action": "start"}
+
+
+def test_unknown_and_incomplete_mic_actions_are_dropped():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()
+        with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+            operator.send_json({"type": "mic", "action": "reboot"})
+            operator.send_json({"type": "mic", "action": "set_device"})   # no id
+            operator.send_json({"type": "mic", "action": "stop"})
+            # Only the legitimate one got through, and the operator socket
+            # survived the other two.
+            assert mic.receive_json() == {"type": "command", "action": "stop"}
+
+
+def test_a_command_with_no_capture_page_does_not_kill_the_operator_socket():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+        operator.send_json({"type": "mic", "action": "stop"})
+        # Still usable afterwards: the wall still answers.
+        operator.send_json({"type": "display", "lanes": ["ml"], "focus": None, "rotate": 0})
+        assert read_until(operator, "display", lambda m: m["lanes"] == ["ml"])
+
+
+def test_losing_the_capture_page_is_announced_to_the_operator():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+        with client.websocket_connect("/ws/mic") as mic:
+            mic.send_json({"type": "mic_state", "capturing": True,
+                           "deviceId": "usb-1", "deviceLabel": "Yamaha", "devices": []})
+            assert read_until(operator, "mic", lambda m: m["connected"])["capturing"] is True
+        gone = read_until(operator, "mic", lambda m: not m["connected"])
+        # The device it WAS on survives the drop — that is the thing you need
+        # to read when the capture page disappears mid-service.
+        assert gone["deviceLabel"] == "Yamaha" and gone["capturing"] is False
+
+
+def test_operator_can_clear_the_caption_backlog():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+        read_until(operator, "display")                 # drain registration
+        operator.send_json({"type": "wall", "action": "clear"})
+        assert read_until(operator, "history")["sentences"] == []
+
+
+def test_a_screen_without_the_token_cannot_clear_the_wall():
+    client = make_client()
+    with client.websocket_connect("/ws/captions") as screen:
+        assert screen.receive_json()["type"] == "history"   # registration
+        assert screen.receive_json()["type"] == "display"
+        screen.send_json({"type": "wall", "action": "clear"})
+        # Prove nothing happened by sending something that DOES: a clear that
+        # had been honoured would sit ahead of this in the queue.
+        with client.websocket_connect(
+                f"/ws/captions?t={server_module.control_token()}") as operator:
+            operator.send_json(
+                {"type": "display", "lanes": ["hi"], "focus": None, "rotate": 0})
+            assert screen.receive_json()["type"] == "display"
+
+
+def test_an_unknown_wall_action_is_ignored_without_dropping_the_socket():
+    client = make_client()
+    token = server_module.control_token()
+    with client.websocket_connect(f"/ws/captions?t={token}") as operator:
+        read_until(operator, "display")
+        operator.send_json({"type": "wall", "action": "detonate"})
+        operator.send_json({"type": "wall", "action": "clear"})
+        assert read_until(operator, "history")["sentences"] == []
+
+
+def test_audio_ingest_does_not_wait_for_the_pipeline():
+    """G4: process() ran inline in the receive loop, so while one chunk was in
+    STT + MT nothing was read off the socket and the next cut was late by the
+    whole of it. A second cut must be taken while the first is still running."""
+    import asyncio
+    import threading
+    import time as _time
+
+    app = create_app(stt=StubSTT("Praise the Lord."), translator=StubTranslator())
+    release = threading.Event()
+    order = []
+
+    class SlowPipeline:
+        async def process(self, audio):
+            order.append("process")
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+
+        async def flush_if_stale(self, has_speech=False):
+            pass
+
+    app.state.pipeline = SlowPipeline()
+    cuts = []
+    record_cut = app.state.seglog.record_cut
+    app.state.seglog.record_cut = lambda *a, **k: (cuts.append(1), record_cut(*a, **k))
+
+    client = TestClient(app)
+    with client.websocket_connect("/ws/mic") as mic:
+        mic.receive_json()                         # ready
+        for _ in range(2):
+            mic.send_bytes(loud(2.0))
+            mic.send_bytes(silence(1.0))
+        deadline = _time.time() + 5
+        while len(cuts) < 2 and _time.time() < deadline:
+            _time.sleep(0.01)
+        taken_while_busy = len(cuts)
+        release.set()
+
+    assert taken_while_busy == 2
+    assert order == ["process", "process"]     # neither cut was dropped

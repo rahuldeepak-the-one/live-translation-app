@@ -6,9 +6,13 @@
   <title>Live Translation — Operator</title>
   <link rel="stylesheet" href="/static/common.css">
   <style>
+    /* Palette, font and --ease come from common.css. This page used to carry
+       its own flat greys (#16202b / #2b3948, 0.5rem radius) and so read as a
+       different product from /status, which is reached from the line directly
+       below it in the startup banner. */
     main { gap: 1.6rem; }
     h2 { font-size: 0.72rem; letter-spacing: 0.09em; text-transform: uppercase;
-         color: #7d8fa3; margin-bottom: 0.6rem; font-weight: 700; }
+         color: var(--text-secondary); margin-bottom: 0.6rem; font-weight: 700; }
     .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
     .row.wide { grid-template-columns: repeat(2, 1fr); }
     /* Five buttons (All + 4 languages) squeeze onto one row at 4 columns on a
@@ -16,14 +20,35 @@
     #focus { grid-template-columns: repeat(3, 1fr); }
     button {
       padding: 0.9rem 0.3rem; font-size: 0.95rem; font-family: inherit;
-      background: #16202b; color: #e8eef5; border: 1px solid #2b3948;
-      border-radius: 0.5rem; cursor: pointer; min-width: 0;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      background: var(--shell); color: var(--text-confirmed);
+      border: 1px solid var(--hairline);
+      border-radius: 0.9rem; cursor: pointer; min-width: 0;
+      overflow: hidden;
+      transition: transform 240ms var(--ease), background-color 260ms var(--ease),
+                  border-color 260ms var(--ease);
     }
-    button.on, button.active { background: #1d4ed8; border-color: #3b82f6; }
+    /* The page had no pressed state at all — on a phone, with the wall across
+       the room, a tap that does not acknowledge itself gets tapped twice. */
+    button:active:not(:disabled) { transform: scale(0.96); }
+    button:focus-visible { outline: 2px solid var(--accent-edge); outline-offset: 3px; }
+    button.on, button.active { background: var(--accent); border-color: var(--accent-edge); }
     button:disabled { opacity: 0.35; cursor: default; }
-    #mirror { color: #7d8fa3; font-size: 0.9rem; line-height: 1.6; }
-    #mirror b { color: #e8eef5; }
+    /* Let language names WRAP rather than ellipsise. മലയാളം was rendering as
+       "മലയാ…ളം" in the narrower 3-column row — a half-spelled language name is
+       worse than a two-line one, and clipping a script the reader depends on
+       to identify their own language is the one thing this row must not do. */
+    .row button { white-space: normal; line-height: 1.25; }
+    #focus button { font-size: 0.88rem; padding: 0.8rem 0.3rem; }
+    #mirror { color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6; }
+    #mirror b { color: var(--text-confirmed); }
+
+    /* Clearing wipes the scrollback on every phone in the building, so it is
+       the one control here that asks twice. */
+    button.danger { border-color: rgba(239, 68, 68, 0.35); color: #f5b5b5; }
+    button.danger.armed { background: var(--halt, #b91c1c); border-color: var(--down-dot);
+                          color: #fff; }
+    .hint { color: var(--text-secondary); font-size: 0.78rem; line-height: 1.5;
+            align-self: center; }
   </style>
 </head>
 <body>
@@ -39,6 +64,7 @@
         <button type="button" data-lang="ml">മലയാളം</button>
         <button type="button" data-lang="te">తెలుగు</button>
         <button type="button" data-lang="hi">हिन्दी</button>
+        <button type="button" data-lang="pa">ਪੰਜਾਬੀ</button>
       </div>
     </section>
     <section>
@@ -49,6 +75,7 @@
         <button type="button" data-focus="ml">മലయാളം</button>
         <button type="button" data-focus="te">తెలుగు</button>
         <button type="button" data-focus="hi">हिन्दी</button>
+        <button type="button" data-focus="pa">ਪੰਜਾਬੀ</button>
       </div>
     </section>
     <section>
@@ -61,6 +88,14 @@
     <section>
       <h2>On the wall now</h2>
       <p id="mirror">…</p>
+    </section>
+    <section>
+      <h2>Caption backlog</h2>
+      <div class="row wide">
+        <button type="button" id="clear-wall" class="danger">Clear the wall</button>
+        <p class="hint" id="clear-hint">Wipes the captions from every screen.
+           The saved transcript is not touched.</p>
+      </div>
     </section>
   </main>
   <script type="module" src="/static/control.js"></script>

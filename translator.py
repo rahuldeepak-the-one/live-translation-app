@@ -1,6 +1,7 @@
 """Translation backends: IndicTrans2 (primary) and NLLB (fallback).
 
-Both expose:  async translate_all(text) -> {"ml": ..., "te": ..., "hi": ...}
+Both expose:  async translate_sentences([s, ...]) -> [{"ml": ..., "te": ..., "hi": ...}, ...]
+              async translate_all(text)         -> {"ml": ..., "te": ..., "hi": ...}
 IndicTrans2 translates all targets in ONE batched generate call.
 """
 import asyncio
@@ -216,6 +217,13 @@ class _AsyncTranslatorBase:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
                 None, self.translate_sentences_sync, sentences, context)
+
+    def translate_sentences_sync(self, sentences, context=""):
+        """One translate_all_sync per sentence. IndicTrans2 overrides this with
+        one batched generate; the NLLB fallback only needs it to exist, or the
+        pipeline (which calls nothing else) drops every utterance."""
+        return [self.translate_all_sync(s, context)
+                for s in sentences if s and s.strip()]
 
 
 class IndicTrans2Translator(_AsyncTranslatorBase):

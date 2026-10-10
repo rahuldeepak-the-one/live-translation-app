@@ -10,3 +10,7 @@ models/
 # and pushed them to a public remote — see the untracking commit for the story.
 design_handoff_projector_display/
 *.zip
+
+# TLS material for the LAN server. The private key must never be committed;
+# regenerate on any machine with ./make-cert.sh (the SAN is host-specific anyway).
+certs/

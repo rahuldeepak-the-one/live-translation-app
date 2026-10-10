@@ -1,4 +1,4 @@
-"""Speech-to-text on faster-whisper (distil-large-v3, English-only)."""
+"""Speech-to-text on faster-whisper (large-v3-turbo, language detected per chunk)."""
 import asyncio
 import logging
 import re
@@ -7,12 +7,16 @@ import numpy as np
 import torch
 
 from config import (
-    WHISPER_MODEL, SOURCE_LANG, NO_SPEECH_PROB_MAX, AVG_LOGPROB_MIN,
+    WHISPER_MODEL, SOURCE_LANG, SOURCE_LANGS, LANG_SWITCH_MIN_PROB, NO_SPEECH_PROB_MAX, AVG_LOGPROB_MIN,
     COMPRESSION_RATIO_MAX, HALLUCINATION_PHRASES, WHISPER_INITIAL_PROMPT,
-    WHISPER_HOTWORDS, FILLER_TOKENS,
+    WHISPER_HOTWORDS, FILLER_TOKENS, WHISPER_VAD_FILTER, SILENCE_ARTIFACTS,
 )
 
 logger = logging.getLogger(__name__)
+
+# Both are whole-segment-only tests: a segment made of nothing but these is
+# noise, but either word inside a real sentence is just a word.
+_WHOLE_SEGMENT_NOISE = FILLER_TOKENS | SILENCE_ARTIFACTS
 
 _NON_WORD = re.compile(r"[^a-z0-9 ]+")
 _BRACKETED_ONLY = re.compile(r"^[\s\[\(\*♪♫]*[^\]\)]*[\]\)\*♪♫\s.]*$")
@@ -21,6 +25,7 @@ _BRACKETED_ONLY = re.compile(r"^[\s\[\(\*♪♫]*[^\]\)]*[\]\)\*♪♫\s.]*$")
 def _normalize(text):
     """Lowercase, strip punctuation, collapse whitespace — for blocklist match."""
     return " ".join(_NON_WORD.sub(" ", text.lower()).split())
+
 
 
 def _hotwords():
@@ -72,7 +77,7 @@ def keep_segment(text, no_speech_prob, avg_logprob, compression_ratio):
         return False
     # Whole-segment filler only. "Uh, turn with me to Ephesians" keeps its false
     # start; "Ugh." has nothing in it worth putting on three screens.
-    if all(word in FILLER_TOKENS for word in normalized.split()):
+    if all(word in _WHOLE_SEGMENT_NOISE for word in normalized.split()):
         return False
     return not any(
         normalized == phrase or normalized.startswith(phrase)
@@ -97,6 +102,19 @@ def strip_hallucinations(segments):
     return " ".join(kept).strip()
 
 
+def choose_language(probs, allowed=SOURCE_LANGS, switch_min=LANG_SWITCH_MIN_PROB):
+    """The chunk's language, from detect_language()'s [(lang, prob), ...].
+
+    English unless another allowed language clears switch_min on its own:
+    Indian-accented English is the main input and Whisper can read it as
+    Hindi, and a wrong switch costs the whole chunk its translations.
+    """
+    best, p = max(((lang, prob) for lang, prob in probs
+                   if lang in allowed and lang != SOURCE_LANG),
+                  key=lambda lp: lp[1], default=(SOURCE_LANG, 0.0))
+    return best if p >= switch_min else SOURCE_LANG
+
+
 class WhisperSTT:
     def __init__(self, model_size=WHISPER_MODEL):
         from faster_whisper import WhisperModel
@@ -108,6 +126,7 @@ class WhisperSTT:
         logger.info("Whisper loaded.")
 
     async def transcribe(self, audio_np):
+        """(text, lang) for one chunk."""
         async with self._lock:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, self._transcribe_sync, audio_np)
@@ -115,21 +134,32 @@ class WhisperSTT:
     def _transcribe_sync(self, audio_np):
         if audio_np.dtype == np.int16:
             audio_np = audio_np.astype(np.float32) / 32768.0
+        lang = SOURCE_LANG
+        if len(SOURCE_LANGS) > 1:
+            _top, _p, probs = self.model.detect_language(audio_np)
+            lang = choose_language(probs)
+            logger.debug("lang=%s top=%s %.2f", lang, _top, _p)
+        english = lang == SOURCE_LANG
         segments, _info = self.model.transcribe(
             audio_np,
-            language=SOURCE_LANG,   # distil-large-v3 is English-only
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
+            language=lang,
+            vad_filter=WHISPER_VAD_FILTER,
+            vad_parameters=(dict(min_silence_duration_ms=500)
+                            if WHISPER_VAD_FILTER else None),
             # Each chunk is an independent transcribe() call, so carrying text
             # across them only lets one hallucination seed the next. Turning it
             # off does NOT discard initial_prompt: prompt_reset_since starts at
             # 0, so the first segment of every call still sees the prompt.
+            # Must stay off for the multilingual model too: conditioning on a
+            # previous segment in another language degrades mixed chunks.
             condition_on_previous_text=False,
-            initial_prompt=WHISPER_INITIAL_PROMPT,
+            # The prompt and hotwords are English sermon vocabulary; on a
+            # Malayalam chunk they only pull the decoder toward English.
+            initial_prompt=WHISPER_INITIAL_PROMPT if english else None,
             # NEVER both — see the measurement on WHISPER_HOTWORDS in config.
             # faster-whisper folds hotwords and initial_prompt into one decoder
             # prompt; past ~224 tokens it truncates and the decoder loops, at a
             # measured 42 stutters per 100 words. Either alone scored zero.
-            hotwords=_hotwords(),
+            hotwords=_hotwords() if english else None,
         )
-        return strip_hallucinations(segments)
+        return strip_hallucinations(segments), lang

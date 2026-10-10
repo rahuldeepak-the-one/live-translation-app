@@ -6,28 +6,70 @@
   <title>Live Translation — My Language</title>
   <link rel="stylesheet" href="/static/common.css">
   <style>
+    /* Palette, font and --ease all come from common.css, which mirrors the
+       projector wall's dark tokens name for name. Only the reader-controlled
+       caption size is local to this page. */
     :root { --caption-size: 1.5rem; }
 
-    /* Header: connection state on the left, text size on the right. */
-    #size-controls { display: flex; gap: 0.4rem; align-items: center; }
-    #size-controls button {
-      width: 2.2rem; height: 2.2rem; line-height: 1; border-radius: 0.5rem;
-      background: #16202b; color: #e8eef5; border: 1px solid #2b3948;
-      cursor: pointer; font-size: 0.95rem;
-    }
-    #size-controls button:disabled { opacity: 0.35; cursor: default; }
+    /* Header is three zones on one line: state, mode, text size. A third row
+       would cost ~44px of caption space, which on a 360px phone is a whole
+       line of Malayalam at the default size. */
+    header { padding-left: 0.9rem; padding-right: 0.9rem; gap: 0.6rem; }
+    #status { display: flex; align-items: center; min-width: 0; flex: 1 1 0; }
+    #status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    /* Fixed four-column grid rather than flex-wrap: on a narrow phone the
-       fourth language wrapped onto a second row and ate caption space. */
-    #picker { display: grid; grid-template-columns: repeat(4, 1fr);
-              gap: 0.5rem; padding: 0.8rem 1rem; }
+    #size-controls { display: flex; gap: 0.4rem; align-items: center; flex: 1 1 0;
+                     justify-content: flex-end; }
+    #size-controls button {
+      width: 2.2rem; height: 2.2rem; line-height: 1; border-radius: 0.7rem;
+      background: var(--shell); color: var(--text-confirmed); border: 1px solid var(--hairline);
+      cursor: pointer; font-size: 0.95rem;
+      transition: transform 240ms var(--ease), background-color 240ms var(--ease);
+    }
+    #size-controls button:active:not(:disabled) { transform: scale(0.92); }
+    #size-controls button:disabled { opacity: 0.3; cursor: default; }
+
+    /* ---- mode switch: one thumb that slides, not two buttons that repaint -- */
+    #mode-switch {
+      position: relative; display: flex; flex: 0 0 auto;
+      padding: 0.2rem; border-radius: 999px;
+      background: var(--shell); border: 1px solid var(--hairline);
+    }
+    #mode-thumb {
+      position: absolute; top: 0.2rem; bottom: 0.2rem; left: 0.2rem;
+      width: calc(50% - 0.2rem); border-radius: 999px;
+      background: var(--accent);
+      box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.2),
+                  0 2px 12px rgba(29, 78, 216, 0.4);
+      transition: transform 520ms var(--ease);
+    }
+    body.mode-recap #mode-thumb { transform: translateX(100%); }
+    #mode-switch button {
+      position: relative; z-index: 1; border: 0; background: none; cursor: pointer;
+      padding: 0.42rem 0.85rem; border-radius: 999px;
+      font: inherit; font-size: 0.72rem; font-weight: 600;
+      letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--text-secondary); transition: color 380ms var(--ease);
+    }
+    #mode-switch button[aria-selected="true"] { color: #ffffff; }
+
+    /* Under ~380px the three zones stop fitting. The dot already carries the
+       connection state; the word next to it is the redundant half. */
+    @media (max-width: 379px) { #status-text { display: none; } }
+
+    /* ------------------------------------------------------------ live mode */
+    #picker { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+              gap: 0.5rem; padding: 0.8rem 0.9rem; }
     #picker button {
       padding: 0.7rem 0.2rem; font-size: 0.95rem; min-width: 0;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      background: #16202b; color: #e8eef5; border: 1px solid #2b3948;
-      border-radius: 0.5rem; cursor: pointer;
+      background: var(--shell); color: var(--text-confirmed); border: 1px solid var(--hairline);
+      border-radius: 0.75rem; cursor: pointer;
+      transition: transform 240ms var(--ease), background-color 300ms var(--ease),
+                  border-color 300ms var(--ease);
     }
-    #picker button.active { background: #1d4ed8; border-color: #3b82f6; }
+    #picker button:active { transform: scale(0.96); }
+    #picker button.active { background: var(--accent); border-color: var(--accent-edge); }
 
     /* One flowing paragraph — sentences are inline spans, so the message reads
        continuously instead of as a stack of separate blocks. */
@@ -42,29 +84,153 @@
 
     /* Not yet translated: the English shows through in grey and is swapped for
        the translation when it lands, so the page never looks stalled. */
-    #transcript span.awaiting { color: #6b7c8f; }
+    #transcript span.awaiting { color: var(--text-pending); }
     /* Still being revised by the server — see the `final` flag. Distinct from
        .awaiting, which means "translated text has not arrived yet". */
     #transcript span.provisional { opacity: 0.75; }
     /* :not(.awaiting) matters — the newest sentence is almost always the one
        still awaiting translation, so an unqualified .live rule would cancel
        the dimming exactly when it is needed. */
+    /* A step brighter than --text-confirmed on purpose: this is the line
+       being spoken right now. */
     #transcript span.live:not(.awaiting) { color: #ffffff; }
 
-    #jump-live {
+    /* Landing marker after a tap through from the recap. A keyframe animation,
+       NOT a transition: a transition has to be declared on every span to be
+       there when the class lands, and declaring background-color/box-shadow
+       transitions page-wide left the colour of ordinary spans stuck part-way
+       through their own 120ms fade. This touches exactly the one span tapped. */
+    #transcript span.flash {
+      border-radius: 0.3rem;
+      animation: flash 1.6s var(--ease) both;
+    }
+    @keyframes flash {
+      0%, 55% { background: rgba(59, 130, 246, 0.3);
+                box-shadow: 0 0 0 0.25rem rgba(59, 130, 246, 0.3); }
+      100%    { background: rgba(59, 130, 246, 0);
+                box-shadow: 0 0 0 0.25rem rgba(59, 130, 246, 0); }
+    }
+
+    /* `main` is the scroll container (see common.css). It carries display:flex,
+       which outranks the [hidden] UA rule — without this line, switching to
+       recap leaves the live transcript on screen underneath it. */
+    #captions[hidden] { display: none; }
+
+    /* ----------------------------------------------------------- recap mode */
+    #recap-panel {
+      flex: 1; overflow-y: auto; overscroll-behavior: contain;
+      padding: 1.6rem 0.9rem calc(6rem + env(safe-area-inset-bottom));
+    }
+    #recap-panel[hidden] { display: none; }
+
+    .eyebrow {
+      display: inline-block; border-radius: 999px;
+      padding: 0.28rem 0.7rem;
+      background: var(--shell); border: 1px solid var(--hairline);
+      font-size: 0.6rem; font-weight: 600;
+      letter-spacing: 0.22em; text-transform: uppercase; color: var(--text-secondary);
+    }
+    #recap-meta {
+      margin-top: 0.85rem; color: var(--text-pending); font-size: 0.88rem; line-height: 1.55;
+      max-width: 34ch;
+    }
+    #recap-head { margin-bottom: 1.6rem; }
+
+    #recap-list { list-style: none; display: flex; flex-direction: column; gap: 0.85rem; }
+
+    /* Entry choreography. transform + opacity only: this is a scrolling
+       container on a phone, and anything that repaints costs frames. */
+    .recap-card {
+      opacity: 0; transform: translateY(1.5rem);
+      transition: opacity 760ms var(--ease), transform 760ms var(--ease);
+      transition-delay: calc(var(--i, 0) * 55ms);
+    }
+    .recap-card.in { opacity: 1; transform: none; }
+
+    /* Outer shell / inner core: the card sits IN something rather than ON the
+       background, so the list reads as objects to scroll past. */
+    .recap-shell {
+      display: block; width: 100%; text-align: left; cursor: pointer;
+      -webkit-appearance: none; appearance: none;
+      padding: 0.4rem; border-radius: 1.75rem;
+      background: var(--shell); border: 1px solid var(--hairline);
+      font: inherit; color: inherit;
+      transition: transform 320ms var(--ease), background-color 320ms var(--ease);
+    }
+    .recap-shell:active { transform: scale(0.985); background: rgba(255, 255, 255, 0.06); }
+    .recap-shell:focus-visible { outline: 2px solid var(--accent-edge); outline-offset: 3px; }
+
+    .recap-core {
+      display: flex; gap: 0.85rem; align-items: flex-start;
+      /* concentric: outer 1.75rem minus the 0.4rem shell padding */
+      padding: 0.95rem 1.05rem; border-radius: calc(1.75rem - 0.4rem);
+      background: var(--card-bg);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    }
+
+    .recap-ord {
+      flex: 0 0 auto; width: 1.9rem; height: 1.9rem; border-radius: 999px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255, 255, 255, 0.05);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      font-size: 0.65rem; font-weight: 600; color: var(--text-secondary);
+      font-variant-numeric: tabular-nums;
+      transition: transform 320ms var(--ease);
+    }
+    .recap-shell:active .recap-ord { transform: scale(1.08); }
+
+    .recap-text {
+      flex: 1; min-width: 0;
+      font-size: calc(var(--caption-size) * 0.8);
+      line-height: 1.6; overflow-wrap: break-word; hyphens: auto;
+    }
+    /* Same contract as the live lane: untranslated shows its English in grey
+       rather than a placeholder. */
+    .recap-text.awaiting { color: var(--text-pending); }
+
+    #recap-empty { font-size: 1.05rem; margin: 3rem auto; max-width: 26ch; }
+    #recap-empty[hidden] { display: none; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .recap-card { opacity: 1; transform: none; transition: none; }
+      #transcript span.flash { animation: none; background: rgba(59, 130, 246, 0.3); }
+      #mode-thumb, .recap-shell, .recap-ord { transition: none; }
+    }
+
+    /* --------------------------------------------------------- floating pill */
+    .float-pill {
       position: fixed; left: 50%; transform: translateX(-50%);
       bottom: calc(1.1rem + env(safe-area-inset-bottom));
-      padding: 0.6rem 1.1rem; border-radius: 999px;
-      background: #1d4ed8; color: #fff; border: 1px solid #3b82f6;
-      font-size: 0.95rem; cursor: pointer; z-index: 10;
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+      padding: 0.62rem 0.55rem 0.62rem 1.1rem; border-radius: 999px;
+      display: flex; align-items: center; gap: 0.6rem;
+      background: var(--accent); color: #fff; border: 1px solid var(--accent-edge);
+      font: inherit; font-size: 0.9rem; cursor: pointer; z-index: 10;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.22);
+      transition: transform 360ms var(--ease);
     }
-    #jump-live[hidden] { display: none; }
+    .float-pill:active { transform: translateX(-50%) scale(0.95); }
+    .float-pill[hidden] { display: none; }
+    /* The glyph never sits naked beside the label — it gets its own well. */
+    .float-pill .glyph {
+      width: 1.6rem; height: 1.6rem; border-radius: 999px;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255, 255, 255, 0.16); font-size: 0.85rem; line-height: 1;
+      transition: transform 360ms var(--ease);
+    }
+    .float-pill:active .glyph { transform: translateY(1px) scale(1.06); }
   </style>
 </head>
-<body>
+<body class="mode-live">
   <header>
-    <span><span id="status-dot"></span><span id="status-text">connecting…</span></span>
+    <span id="status"><span id="status-dot"></span><span id="status-text">connecting…</span></span>
+    <div id="mode-switch" role="tablist" aria-label="View mode">
+      <span id="mode-thumb" aria-hidden="true"></span>
+      <button id="mode-live" type="button" role="tab" aria-selected="true"
+              aria-controls="captions" data-mode="live">Live</button>
+      <button id="mode-recap" type="button" role="tab" aria-selected="false"
+              aria-controls="recap-panel" data-mode="recap">Recap</button>
+    </div>
     <span id="size-controls">
       <button id="text-smaller" type="button" aria-label="Smaller text">A−</button>
       <button id="text-bigger" type="button" aria-label="Larger text">A+</button>
@@ -75,12 +241,26 @@
     <button data-lang="ml">മലയാളം</button>
     <button data-lang="te">తెలుగు</button>
     <button data-lang="hi">हिन्दी</button>
+    <button data-lang="pa">ਪੰਜਾਬੀ</button>
   </nav>
-  <main id="captions">
+  <main id="captions" role="tabpanel" aria-labelledby="mode-live">
     <div class="empty-state" id="empty">Waiting for the speaker…</div>
     <p id="transcript"></p>
   </main>
-  <button id="jump-live" type="button" hidden>↓ Live</button>
+  <section id="recap-panel" role="tabpanel" aria-labelledby="mode-recap" hidden>
+    <div id="recap-head">
+      <span class="eyebrow">So far</span>
+      <p id="recap-meta"></p>
+    </div>
+    <ol id="recap-list"></ol>
+    <div class="empty-state" id="recap-empty" hidden>Not enough has been said yet.</div>
+  </section>
+  <button id="jump-live" class="float-pill" type="button" hidden>
+    Live<span class="glyph" aria-hidden="true">↓</span>
+  </button>
+  <button id="recap-refresh" class="float-pill" type="button" hidden>
+    <span id="recap-refresh-label">Update recap</span><span class="glyph" aria-hidden="true">↻</span>
+  </button>
   <script type="module" src="/static/view.js"></script>
 </body>
 </html>

@@ -54,7 +54,7 @@ body {
      request fails closed and flashes a fallback across the projector mid
      service. The Noto families are installed on the host instead. */
   font-family: "Noto Sans", "Noto Sans Telugu", "Noto Sans Malayalam",
-               "Noto Sans Devanagari", system-ui, sans-serif;
+               "Noto Sans Devanagari", "Noto Sans Gurmukhi", system-ui, sans-serif;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -159,6 +159,10 @@ body {
 /* Three cards are 2 + 1: the odd one spans, rather than leaving a hole. */
 .grid[data-cards="3"] > .card:nth-child(3) { grid-column: 1 / -1; }
 .grid[data-cards="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+/* Five are 3 + 2 on a six-column track, so the bottom pair spans the width. */
+.grid[data-cards="5"] { grid-template-columns: repeat(6, 1fr); grid-template-rows: 1fr 1fr; }
+.grid[data-cards="5"] > .card { grid-column: span 2; }
+.grid[data-cards="5"] > .card:nth-child(n+4) { grid-column: span 3; }
 
 /* --- card ----------------------------------------------------------------- */
 .card {
@@ -183,11 +187,12 @@ body {
 }
 
 /* Per-script sizes: the same point size does not read the same across these
-   four scripts at 25 metres. Devanagari carries the most detail and needs the
+   five scripts at 25 metres. Devanagari carries the most detail and needs the
    most; Malayalam's taller x-height needs the least. */
 .card[data-lang="te"] { --card-font: 46px; --card-line: 1.45; }
 .card[data-lang="ml"] { --card-font: 42px; --card-line: 1.5; }
 .card[data-lang="hi"] { --card-font: 54px; --card-line: 1.45; }
+.card[data-lang="pa"] { --card-font: 50px; --card-line: 1.45; }
 .card[data-lang="en"] { --card-font: 44px; --card-line: 1.4; }
 
 /* The fixed box the fit pass measures against. --card-scale is the only thing

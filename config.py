@@ -19,7 +19,20 @@
 # real input is live Indian-English preaching through a mixer. The honest test
 # is a recorded service; this is the best evidence available without one.
 #
-# ROLLBACK IS THIS ONE LINE: "distil-large-v3" is still in the HF cache.
+# 2026-10-06: replaced by large-v3-turbo for the 5-language upgrade. The
+# distilled models above are English-only; turbo is multilingual (it keeps
+# large-v3's encoder and cuts the decoder to 4 layers, so ~1.6GB fp16).
+# ROLLBACK: put "distil-whisper/distil-large-v3.5-ct2" back (still in the HF
+# cache) AND set SOURCE_LANGS = ("en",) — distil cannot detect a language.
+#
+# 2026-10-10: ROLLED BACK. Replaying the three 2026-09-20 recordings (1280s,
+# 356 cuts, same machine, one model at a time): turbo took 1345s of STT for
+# 1280s of audio — slower than real time before MT even runs — against 636s for
+# distil (median chunk 3.9s vs 1.75s, part of it the extra detect_language
+# encoder pass). And in 20 of 356 chunks turbo read WHISPER_INITIAL_PROMPT back
+# as speech ("Father, we thank You for Your mercy, ..."); distil did so in 0.
+# Language detection itself was clean: 356/356 English. Fix both before
+# retrying turbo; until then it is English-in, five lanes out.
 WHISPER_MODEL = "distil-whisper/distil-large-v3.5-ct2"
 TRANSLATOR_BACKEND = "indictrans2"          # "indictrans2" | "nllb"
 INDICTRANS2_MODEL = "ai4bharat/indictrans2-en-indic-dist-200M"
@@ -27,22 +40,64 @@ NLLB_MODEL = "facebook/nllb-200-distilled-600M"
 
 # --- Languages ---
 SOURCE_LANG = "en"
-TARGET_LANGS = ["ml", "te", "hi"]           # translation targets (en is the source)
+# Languages a chunk may be detected as. Whisper chooses among ~100; anything
+# outside this set is noise or a misdetection, so the choice is restricted to
+# these. Only English is translated today (the MT model is en->indic only):
+# a chunk in another of these is shown as said, in every lane.
+SOURCE_LANGS = ("en",)   # was ("en", "ml", "hi", "pa", "te") on turbo; see above
+# The sermon is English and the speaker's accent is Indian, which Whisper can
+# read as Hindi. So English is the default and another language must win this
+# much probability on its own to take the chunk.
+# CALIBRATION KNOB — see the 2026-10-06 replay note in stt.choose_language.
+LANG_SWITCH_MIN_PROB = 0.5
+TARGET_LANGS = ["ml", "te", "hi", "pa"]     # translation targets (en is the source)
 FLORES_CODES = {
     "en": "eng_Latn",
     "ml": "mal_Mlym",
     "te": "tel_Telu",
     "hi": "hin_Deva",
+    "pa": "pan_Guru",
 }
 
 # --- Audio / chunking (M1 engine) ---
 SAMPLE_RATE = 16000
-SILENCE_THRESHOLD = 300      # RMS below this = silence
+# Calibrated against the Yamaha MG-XU feed in the church, 2026-09-20: 79
+# windows of live preaching measured a noise floor of RMS 31-37 (p5-p20) and
+# speech of RMS 232-1031 (p50-p99). At 300 this threshold sat INSIDE the speech
+# distribution and called 57% of windows silence, so the buffer hit its
+# SILENCE_DURATION_S between ordinary words and cut at the MIN_TRIGGER_S floor.
+# A 1.5s fragment is the input distil-whisper repeats on, which is where
+# "the foundation of the foundation of the foundation" came from - a single
+# 1.5s chunk. 120 is ~4x the measured floor and ~half the median speech window,
+# so it sits in the gap rather than in either population.
+# Re-measure if the room or the board gain changes. ./use-mic.sh --floor used
+# to do this and went with the browser capture path; run its pipe directly,
+# with nobody speaking (miclevel reads to EOF, so the capture must be bounded):
+#   timeout 8 parec --device <name> --raw --format=s16le --rate=16000 \
+#       --channels=2 | python3 miclevel.py floor
+SILENCE_THRESHOLD = 120      # RMS below this = silence
 SILENCE_DURATION_S = 0.6     # trailing silence that triggers processing
 MAX_BUFFER_S = 8.0           # force-process after this long
 MIN_SPEECH_S = 0.5           # ignore blips shorter than this
 MIN_TRIGGER_S = 1.5          # need at least this much audio before silence-trigger
 SPEECH_WINDOW_S = 0.1       # window size for the "is there any speech here" check
+
+# faster-whisper's own Silero VAD, applied INSIDE transcribe() before decoding.
+# Off, because AudioBuffer already decides what is speech — using its own RMS
+# windows, calibrated to this room — and a second opinion here is not a safety
+# net but a second, stricter gate that silently deletes what the first one
+# passed. Measured on the tee's clips, 2026-09-20 (transcripts/audio/):
+#
+#   8.0s of audio, 100% of windows above SILENCE_THRESHOLD
+#     vad_filter=True  -> 'be my'
+#     vad_filter=False -> 'the cross be my glory ever to'
+#
+# Eight seconds in, two words out, was this parameter — not the mixer, not the
+# transport (the tee proves 0% of received audio failed to reach the model) and
+# not the hallucination filters (no_speech_prob was 0.00 on every clip).
+# Turn it back on only if silence starts producing hallucinated text that
+# NO_SPEECH_PROB_MAX and HALLUCINATION_PHRASES do not already catch.
+WHISPER_VAD_FILTER = False
 
 # --- Broadcast ---
 # Sentences replayed to a late-joining screen. This counted CHUNKS until Stage 2
@@ -57,8 +112,19 @@ HISTORY_SIZE = 30
 HOST = "0.0.0.0"
 PORT = 8080
 
+# --- TLS ---
+# Optional. This was mandatory while capture lived in a browser: Chrome exposes
+# getUserMedia only in a "secure context", http://localhost is one and
+# http://192.168.1.110 is not, so over plain HTTP the phone meant to be the
+# microphone never got a permission prompt. Capture moved to ./feed-mic.py, so
+# what is left is keeping /view's sermon text off the clear on a venue WiFi.
+# Generated by make-cert.sh; see tls.py for why self-signed is the only option
+# for a private IP and why missing files fall back to HTTP rather than failing.
+SSL_CERTFILE = "certs/server.crt"
+SSL_KEYFILE = "certs/server.key"
+
 # --- STT quality gates (hallucination suppression) ---
-# distil-large-v3 emits confident text ("Thank you.", "Thanks for watching!")
+# distil-large-v3.5 emits confident text ("Thank you.", "Thanks for watching!")
 # when handed silence or hiss. AudioBuffer.has_speech() is the first line of
 # defence; these are the second, applied per Whisper segment.
 NO_SPEECH_PROB_MAX = 0.6      # Whisper's own "this isn't speech" score
@@ -74,8 +140,10 @@ NO_SPEECH_PROB_MAX = 0.6      # Whisper's own "this isn't speech" score
 #
 # It is also NOT what protects against noise, which was the reason it existed.
 # Fed digital silence, fan noise at this laptop's measured floor (RMS 3806) and
-# white hiss, the model emits nothing at all — Silero VAD stops it before any
-# score is read. And it never caught the hallucination this church actually
+# white hiss, Silero VAD stopped it before any score was read. Silero is off
+# now (WHISPER_VAD_FILTER above), so the loudness gate (SILENCE_THRESHOLD) is what keeps
+# noise out of Whisper, and the "you" filter catches what slips past. And it
+# never caught the hallucination this church actually
 # got: "Thank you." 39 times on 2026-08-23, high-confidence, straight through.
 #
 # -2.0 rather than off: ~97% of the available gain, while still flooring total
@@ -86,8 +154,9 @@ AVG_LOGPROB_MIN = -2.0        # drop only catastrophically bad decodes
 COMPRESSION_RATIO_MAX = 2.2   # drop repetition collapse ("eh, eh, eh, eh")
 
 # Phrases Whisper learned from YouTube outros. Deliberately conservative: bare
-# "Thank you." is NOT here, because a speaker genuinely says it — that case is
-# handled by the energy gate and NO_SPEECH_PROB_MAX instead.
+# "Thank you." is NOT here, because a speaker genuinely says it. Nothing stops a
+# hallucinated bare "Thank you." today: it passed both the energy gate and
+# NO_SPEECH_PROB_MAX 39 times on 2026-08-23.
 HALLUCINATION_PHRASES = (
     "thanks for watching",
     "thank you for watching",
@@ -258,6 +327,27 @@ FILLER_TOKENS = frozenset(
     "huh ugh yeah yeh yep yup nah nope".split()
 )
 
+# What Whisper says when handed silence. Measured 2026-09-20 with
+# WHISPER_VAD_FILTER off: two seconds of digital silence, and two seconds of
+# room noise at RMS 35, both decode to a bare "you" with no_speech_prob=0.00,
+# avg_logprob=-0.63 and compression_ratio=0.27 — every confidence signal says
+# the model is certain, so none of the numeric filters above can touch it.
+# Silero's VAD used to hide this; with it off the artifact is ours to catch.
+#
+# Matched as a WHOLE SEGMENT ONLY, never as a prefix. That distinction is the
+# entire point: "you" as a complete utterance is the artifact, while
+# "You are the light of the world" is Matthew 5:14, and HALLUCINATION_PHRASES
+# would take both because it also matches on startswith.
+#
+# The cost is a genuine one-word "You." being dropped, which is rare enough and
+# cheaper than a caption appearing on the wall during every silent pause.
+#
+# ONLY "you" — the one artifact actually measured. "thank"/"thanks"/"bye" were
+# tried here and reverted: test_bare_thank_you_is_still_kept pins a bare
+# "Thank you." as KEPT because a preacher genuinely says it, and that decision
+# predates this one. Add a word here only after seeing silence produce it.
+SILENCE_ARTIFACTS = frozenset({"you"})
+
 # --- Translation context ---
 # IndicTrans2 is a sentence-level model with no memory between calls, which is
 # why the same character was renamed four times in one sermon. Prepending the
@@ -335,8 +425,8 @@ SOURCE_REWRITES = (
 # Each segment is translated independently, so nothing carries a chosen term
 # forward: "steward" appeared as four different Malayalam words in one sermon
 # on 2026-08-21 (കാവൽക്കാരൻ "watchman", സ്റ്റീവർഡ്, മേൽനോട്ടക്കാർ "overseer",
-# സൂക്ഷിപ്പുകാരൻ "custodian"). MT_USE_CONTEXT makes drift less likely; only this
-# table pins a term.
+# സൂക്ഷിപ്പുകാരൻ "custodian"). MT_USE_CONTEXT (off today) would make drift less
+# likely; only this table pins a term.
 #
 # Substitution is at STEM level and the suffix is preserved, because Malayalam
 # and Telugu agentive nouns inflect on the stem:
@@ -411,7 +501,7 @@ MT_REPETITION_PENALTY = 1.15
 # --- Wall display (stage 1) ---
 # The wall's startup state. /control overrides it at runtime; nothing persists
 # across a restart, which is deliberate — a service always begins predictable.
-DEFAULT_LANES = ["en", "ml", "te", "hi"]
+DEFAULT_LANES = ["en", "ml", "te", "hi", "pa"]
 # Auto-rotate bounds. Below 5s nobody finishes a line; above 120s it is not
 # rotation, it is a pin the operator forgot about.
 ROTATE_MIN_S = 5
